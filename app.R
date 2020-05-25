@@ -1,19 +1,5 @@
-### Stream Hydrology And Rainfall Knowledge System (SHARKS)
-### Author: Conrad Brendel, cbrendel@vt.edu
-
-### Install Missing Packages ________________________________________________________________________________________________________________
-list.of.packages <- c("shiny", "shinyjs","shinydashboard","jsonlite","RJSONIO","RCurl","lubridate","stringr","DT","data.table","ggplot2","zoo","dataRetrieval","EcoHydRology","grid","gridExtra","dplyr","devtools","googlesheets","googleAuthR","lubridate","shinyWidgets","rwunderground","pracma","shinyalert","leaflet","scales","rgdal","shadowtext")
-new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-if(length(new.packages)) install.packages(new.packages)
-
-# Install packages from github if not installed
-if(!"dashboardthemes" %in% installed.packages()[,"Package"]){
-  devtools::install_github("nik01010/dashboardthemes")
-}
-
-if(!"googleID" %in% installed.packages()[,"Package"]){
-  devtools::install_github("MarkEdmondson1234/googleID")
-}
+#### SHARKS 
+# Author: Conrad Brendel, cbrendel@vt.edu
 
 ### Call Libraries __________________________________________________________________________________________________________________________
 library(shiny)
@@ -32,17 +18,35 @@ library(grid)
 library(gridExtra)
 library(dplyr)
 library(dashboardthemes) #Applys theme to dashboard
-library(googlesheets)
+library(googlesheets4)
 library(shinyjs)
-library(googleAuthR) # Used for Google Authentication
-library(googleID) # Used to get Google ID when logging in
-library(lubridate) # Used to manage dates
-library(rwunderground) # Used for Forecast
 library(pracma) # Used to calculate volumes of brushed data in interactive hydrograph
 library(shinyalert) # Used for help buttons
 library(leaflet) # Used for mapping
 library(rgdal) # Used to display shapefiles
 library(shadowtext) # Adds halo to data labels for flood stage
+library(tidyr) # Reshaping data
+
+### API Keys __________________________________________________________________________________________________________________________________
+geocode_key=""
+darksky_key=""
+
+# Spreadsheet ID's for each HOBO sensor
+HOBO_sheets=c("", #ROA01_sheet.xlsx
+              "", #ROA02_sheet.xlsx
+              "", #ROA03_sheet.xlsx
+              "", #ROA04_sheet.xlsx
+              "", #ROA05_sheet.xlsx
+              "", #ROA06_sheet.xlsx
+              "", #ROA07_sheet.xlsx
+              "", #ROA08_sheet.xlsx
+              ""  #ROA09_sheet.xlsx
+)
+
+# Spreadsheet ID for Sediment Turbidity Relationships
+SSC_sheet=""
+
+sheets_deauth() # Make it so googlesheets4 doesn't require an accesss token
 
 ### Create Theme for UI _______________________________________________________________________________________________________________________
 
@@ -71,7 +75,7 @@ theme_blue_gradient <- shinyDashboardThemeDIY(
     direction = "down"
     ,colorStart = "rgb(20,97,117)"
     ,colorMiddle = "rgb(56,161,187)"
-    ,colorEnd = "rgb(3,22,56)"
+    ,colorEnd = "rgb(70,185,213)"
     ,colorStartPos = 0
     ,colorMiddlePos = 50
     ,colorEndPos = 100
@@ -168,39 +172,6 @@ theme_blue_gradient <- shinyDashboardThemeDIY(
   
 )
 
-### Google Authentification Options _________________________________________________________________________________________________________
-options(googleAuthR.scopes.selected = c("https://www.googleapis.com/auth/userinfo.email",
-                                        "https://www.googleapis.com/auth/userinfo.profile",
-                                        "https://www.googleapis.com/auth/spreadsheets",
-                                        "https://www.googleapis.com/auth/spreadsheets.readonly"
-))
-
-
-options(googleAuthR.webapp.client_id = "removed_client_id") # Create a Google App and add your client and secret here (instead of "client_id" and "client_secret") to access Google Sheets that store data
-options(googleAuthR.webapp.client_secret = "removed_client_secret")
-
-### Define API Functions ____________________________________________________________________________________________________________________
-
-# Helper functions that test whether an object is either NULL or a list of NULLs and then process
-is.NullOb=function(x) is.null(x) | all(sapply(x, is.null))
-
-rmNullObs=function(x) {
-  x <- Filter(Negate(is.NullOb), x)
-  lapply(x, function(x) if (is.list(x)) 
-    rmNullObs(x) else x)
-}
-
-# Get values from GoogleSheet
-getvalues=function(spreadsheetId, ranges = NULL, majorDimension=NULL,valueRenderOption=NULL,dateTimeRenderOption=NULL) {
-  url <- sprintf("https://sheets.googleapis.com/v4/spreadsheets/%s/%s", spreadsheetId,"values:batchGet")
-  # sheets.spreadsheets.get
-  pars = list(ranges = ranges, majorDimension=majorDimension,valueRenderOption=valueRenderOption,dateTimeRenderOption=dateTimeRenderOption)
-  f <- googleAuthR::gar_api_generator(url, "GET", pars_args = rmNullObs(pars), 
-                                      data_parse_function = function(x) x)
-  f()
-  
-}
-
 ### Define UI _______________________________________________________________________________________________________________________________
 sidebar=dashboardSidebar(
   useShinyjs(),
@@ -229,20 +200,23 @@ sidebar=dashboardSidebar(
              
              ".input-sm { font-size:110%; line-height: 110%;}",
              ".selectize-input { font-size: 110%; line-height: 110%;}",     # adjust text size
-             ".selectize-dropdown { font-size: 110%; line-height: 110%; }"  # adjust text size
+             ".selectize-dropdown { font-size: 110%; line-height: 110%; }",  # adjust text size
+             
+             ".content {min-height:1900px !important}" #Make main panel longer than sidebar menu so there is only one scrollbar
              ),
 
   width=300,
   sidebarMenu(
       id="sidebarmenu",
-      menuItem("Summary", tabName = "Summary", icon = icon("sliders"), badgeLabel = "Home",badgeColor="aqua"),
+      menuItem("Home/Help",tabName="Home",icon=icon("home"), badgeLabel = "Home",badgeColor="aqua"),
+      menuItem("Summary", tabName = "Summary", icon = icon("sliders")),
       menuItem("Map",tabName="Map",icon=icon("map")),
       menuItem("Forecast",tabName="Forecast",icon=icon("bolt")),
+      menuItem("Real-Time Flood Stages",tabName="Flood",icon=icon("bar-chart")),
       menuItem("Interactive Plots",tabName="InteractivePlots",icon=icon("signal")),
-      menuItem("Tables", icon = icon("th"), tabName = "Tables"),
-      menuItem("Storm Sewer", icon=icon("bullseye"),tabName="HOBO"),
-      menuItem("Real-Time Flood Stages",icon=icon("bar-chart"),tabName="Flood"),
-      menuItem("Help",icon=icon("question"),tabName="Help")
+      menuItem("Tables", tabName = "Tables", icon = icon("th")),
+      menuItem("Sediment",tabName="Sediment",icon=icon("area-chart")),
+      menuItem("Storm Sewer",tabName="HOBO", icon=icon("bullseye"))
     ),
     
     hr(), # Add Horizontal Rule
@@ -288,14 +262,15 @@ sidebar=dashboardSidebar(
     selectizeInput("USGS_Site", label=div(div(style="font-size:115%;display:inline-block",tags$b("USGS Stream Station IDs")),div(style="display:inline-block",actionButton("help_usgs_flow",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), 
                    choices=list("Lick Run"="0205551460",
                                 "Roanoke River at Roanoke"="02055000",
-                                "Roanoke River at Glenvar"="02054530",
                                 "Roanoke River at Lafayette"="02054500",
-                                "Tinker Creek"="02055100"),
+                                "Roanoke River at Glenvar"="02054530",
+                                "Roanoke River at Route 117"="02054750",
+                                "Roanoke River at 13th St."="02055080",
+                                "Tinker Creek near Daleville"="02055100",
+                                "Tinker Creek at Columbia St."="02055379",
+                                "Tinker Creek above Glade Creek"="0205551614"),
                    selected=c("Lick Run"="0205551460"), multiple=TRUE,options=list(create=TRUE,placeholder="Select From List Below or Enter Station #")
     ),
-    
-    # Input Watershed Area
-    uiOutput("Box3"),
   
     # Select Parameters to Download
     selectizeInput("parameterCd", label=div(div(style="font-size:115%;display:inline-block",tags$b("Download Parameters")),div(style="display:inline-block",actionButton("help_parameters",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),choices=list("Discharge (cfs)"="00060",
@@ -305,7 +280,7 @@ sidebar=dashboardSidebar(
                                                                                   "Dissolved Oxygen (mg/L)"="00300",
                                                                                   "pH"="00400",
                                                                                   "Turbidity (FNU)"="63680"),
-                   selected=c("Discharge (cfs)"="00060","Gauge Height (ft)"="00065"), multiple=TRUE, options=list(placeholder="Select Parameters From List Below or Enter USGS Parameter Code")),
+                   selected=c("Discharge (cfs)"="00060","Gauge Height (ft)"="00065"), multiple=TRUE, options=list(placeholder="Select Parameters From List Below")),
     
     hr(), # Add Horizontal Rule
   
@@ -324,11 +299,15 @@ sidebar=dashboardSidebar(
     uiOutput("Box2"),
     
     # Button to show/hide extra inputs
-    switchInput("show_hide",label=tags$b("Hidden Settings"),value=FALSE,onLabel="Show",offLabel="Hide"),
+    # switchInput("show_hide",label=tags$b("Hidden Settings"),value=FALSE,onLabel="Show",offLabel="Hide"),
   
     # Extra inputs
     div(id="extra",
-        hr(), # Add Horizontal Rule
+        # hr(), # Add Horizontal Rule
+        
+        # Plot Colors
+        radioButtons("plot_color",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Colors By:")),div(style="display:inline-block",actionButton("help_color",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),choices=list("Station"=0,"Dataset"=1),selected=c("Station"=0)),
+        
         # Input Timezone
         selectInput("user.tz",label=div(div(style="font-size:115%;display:inline-block",tags$b("Time Zone")),div(style="display:inline-block",actionButton("help_time",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),
                     choices=list("America/New York (EST/EDT)"="America/New_York",
@@ -339,18 +318,45 @@ sidebar=dashboardSidebar(
                                  "Coordinated Universal Time (UTC)"="Etc/UTC"
                     ),
                     selected="America/New York (EST/EDT)", multiple=FALSE, selectize=TRUE
-        ),
+        )
         
         # # Input Network Type
-        selectInput("user.network", label=div(div(style="font-size:115%;display:inline-block",tags$b("NOAA Network")),div(style="display:inline-block",actionButton("help_network",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), choices=list("ASOS"=1),
-                    selected = NULL, multiple = FALSE, selectize = TRUE),
+        # selectInput("user.network", label=div(div(style="font-size:115%;display:inline-block",tags$b("NOAA Network")),div(style="display:inline-block",actionButton("help_network",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), choices=list("ASOS"=1),
+        #             selected = NULL, multiple = FALSE, selectize = TRUE),
         
-        selectInput("plot_color",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Colors By:")),div(style="display:inline-block",actionButton("help_color",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),choices=list("Station"=0,"Dataset"=1),selected=c("Station"=0),multiple=FALSE,selectize=TRUE)
+        
     )
 )
 
-body=dashboardBody(
+body=dashboardBody(tags$head(tags$style(HTML('.wrapper {height: auto !important; position:relative; overflow-x:hidden; overflow-y:visible}'))),
   tabItems(
+    tabItem(tabName="Home",
+            div(class="flex-container",style="display:flex;flex-direction:row;flex-wrap:wrap;justify-content:flex-start;font-size:120%;",
+                div(
+                  HTML('<div>
+                          <img style="min-width:150px;top:1vh;width:20vw;margin-bottom:-70px" src="Shark.png" alt="SHARK">
+                        </div>')
+                ),
+                div(
+                  HTML('<div>
+                          <span style="line-height:11vmin;font-size:6vmin;position:relative;top:2vh;white-space:nowrap"><b>Welcome To</b></span><br>
+                          <span style="font-family:Impact;font-size:15vmin;line-height:15vmin;position:relative;"><b>SHARKS</b></span><br>
+                          <p style="line-height:2.5vmin;font-size:3vmin;max-width:44vmax"><b>The Stream Hydrology And Rainfall Knowledge System</b></p>
+                        </div>')
+                )
+            ),
+            div(
+              h3('Navigate to an analysis feature by selecting a page from the top of the sidebar menu.'),
+              h3('The sidebar menu contains the SHARKS inputs and options. Help buttons, indicated by "?" symbols, are placed throughout the app to provide information regarding the various inputs, outputs, and options.'),
+              div(style="display:inline-block", h3("Download the SHARKS user manual here:")),
+              div(style="display:inline-block",downloadButton("manual_download","Download"))
+            ),
+            div(
+              hr(),
+              HTML('<h3 align=center><b>For Questions, Please Contact <a href="mailto:cbrendel@vt.edu">cbrendel@vt.edu</a></b></h3>'),
+              HTML('<h4 align=center>Also Check Out The <a href="http://roanokeva.gov/sharks"> Streamlined SHARKS App</a> Developed For The City Of Roanoke, Virginia!</h4>')
+            )
+            ),
     tabItem(tabName = "Summary",
             div(id="FAA",
                 div(div(style="display:inline-block",h3("FAA IDs for selected State:")),div(style="display:inline-block",actionButton("help_faaid_table",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
@@ -369,22 +375,25 @@ body=dashboardBody(
               ),
               div(div(style="display:inline-block",h3("Hyetograph & Hydrograph:")),div(style="display:inline-block",actionButton("help_hh",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
               uiOutput("sized_plot"),
-              # div(img(src="Gauges.png",width=1000),style="text-align: center;") # Add static map of Roanoke stations
               div(id="flood",
                 div(div(style="display:inline-block",h3("Maximum Flood Stages:")),div(style="display:inline-block",actionButton("help_flood",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
                 div(style="text-align:center",
-                  div(id="lick_run",style="display:inline-block",plotOutput("flood_lick_run",width=300)),
-                  div(id="tinker",style="display:inline-block",plotOutput("flood_tinker",width=300)),
-                  div(id="rr1",style="display:inline-block",plotOutput("flood_rr1",width=300)),
-                  div(id="rr2",style="display:inline-block",plotOutput("flood_rr2",width=300)),
-                  div(id="rr3",style="display:inline-block",plotOutput("flood_rr3",width=300))
+                    div(id="rr3",style="display:inline-block",plotOutput("flood_rr3",width=300)),
+                    div(id="rr2",style="display:inline-block",plotOutput("flood_rr2",width=300)),
+                    div(id="rr_117",style="display:inline-block",plotOutput("flood_rr_117",width=300)),
+                    div(id="rr1",style="display:inline-block",plotOutput("flood_rr1",width=300)),
+                    div(id="rr_13",style="display:inline-block",plotOutput("flood_rr_13",width=300)),
+                    div(id="tinker",style="display:inline-block",plotOutput("flood_tinker",width=300)),
+                    div(id="tinker_columbia",style="display:inline-block",plotOutput("flood_tinker_columbia",width=300)),
+                    div(id="lick_run",style="display:inline-block",plotOutput("flood_lick_run",width=300)),
+                    div(id="tinker_glade",style="display:inline-block",plotOutput("flood_tinker_glade",width=300))
                 )
               )
             )
     ),
     
     tabItem(tabName="Map",
-            leafletOutput("map",height=850)
+              leafletOutput("map",height=850)
     ),
     
     tabItem(tabName="Forecast",
@@ -397,11 +406,12 @@ body=dashboardBody(
     
     tabItem(tabName = "InteractivePlots",
             
-            div(div(style="display:inline-block",switchInput("interact",label=tags$b("Select Plot:"),value=TRUE,onLabel="Hydrograph",offLabel="Hyetograph",inline=T)),div(style="display:inline-block",actionButton("help_interact_switch",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
+            div(div(style="display:inline-block;padding-bottom:10px",switchInput("interact",label=tags$b("Select Plot:"),value=TRUE,onLabel="Hydrograph",offLabel="Hyetograph",inline=T)),div(style="display:inline-block",actionButton("help_interact_switch",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
             div(id="hydro_int",
-                plotOutput("hydro_interact",click="hydro_click",brush=brushOpts("hydro_brush",direction="x")),
-                div(div(style="display:inline-block",h3("Clicked Data:")),div(style="display:inline-block",actionButton("help_hydro_click",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
-                DT::dataTableOutput("hydro_click"),
+                div(style="position:relative;",
+                    plotOutput("hydro_interact",hover=hoverOpts("Hydro_hover",delay=100,delayType="debounce"),brush=brushOpts("hydro_brush",direction="x")),
+                    uiOutput("Hydro_hover")
+                ),
                 div(div(style="display:inline-block",h3("Volume Summary:")),div(style="display:inline-block",actionButton("help_hydro_vol",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),
                 DT::dataTableOutput("hydro_brush_vol"),
                 div(div(style="display:inline-block", h3("Brushed Data:")),div(style="display:inline-block",actionButton("help_hydro_brush",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;padding-right:20px;border:none;background:none")),div(style="display:inline-block",downloadButton("hydro_brush_download","Download"))),
@@ -432,17 +442,10 @@ body=dashboardBody(
             DT::dataTableOutput("USGS_PFDS")
      ),
     tabItem(tabName="HOBO",
-            googleAuthUI("gauth_login"),
-            textOutput("display_username"),
-            div(id="auth",
-                h3("Please Login to access this tab")
-            ),
-            HTML("<p> \n &nbsp; <p>"), #Add some blank space
             div(id="HOBO",
                 leafletOutput("hobo_map",height=500),
-                # div(img(src="HOBO.png",width=1000),style="text-align: center;"), # Add static map of storm sewer sensors
                 HTML("<p> \n &nbsp; <p>"), #Add some blank space,
-                div(style="display:inline-block",selectizeInput("HOBO_sensor",label=div(div(style="display:inline-block",tags$b("Select Sensors to Map/Plot")),div(style="display:inline-block",actionButton("help_hobo_sensor",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),choices=list("ROA1","ROA2","ROA3","ROA4","ROA5","ROA6","ROA7","ROA8"),selected=c("ROA1","ROA2","ROA3","ROA4","ROA5","ROA6","ROA7","ROA8"),multiple=TRUE,options=list(create=FALSE,placeholder="Select From List Below"))),
+                div(style="display:inline-block",selectizeInput("HOBO_sensor",label=div(div(style="display:inline-block",tags$b("Select Sensors to Map/Plot")),div(style="display:inline-block",actionButton("help_hobo_sensor",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),choices=list("ROA1","ROA2","ROA3","ROA4","ROA5","ROA6","ROA7","ROA8","ROA9"),selected=c("ROA1","ROA2","ROA3","ROA4","ROA5","ROA6","ROA7","ROA8","ROA9"),multiple=TRUE,options=list(create=FALSE,placeholder="Select From List Below"))),
                 div(style="display:inline-block",uiOutput("Box4")),
                 div(style="display:inline-block",selectInput("HOBO_data",label=div(div(style="display:inline-block",tags$b("Storm Sewer Plot Parameter")),div(style="display:inline-block",actionButton("help_hobo_parameter",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))),choices=list("Relative Depth"="d_rel","Relative Flow"="Q_rel"),selected=c("Relative Depth"="d_rel"),multiple = FALSE, selectize = TRUE)),
                 hr(),
@@ -456,26 +459,42 @@ body=dashboardBody(
     tabItem(tabName="Flood",
             div(div(style="display:inline-block", h3("Real-Time Flood Stages:")),div(style="display:inline-block",actionButton("help_real_flood",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;padding-right:20px;border:none;background:none"))),
             div(style="text-align:center",
-                div(style="display:inline-block",plotOutput("gh_lick_run",width=300)),
-                div(style="display:inline-block",plotOutput("gh_tinker",width=300)),
-                div(style="display:inline-block",plotOutput("gh_rr1",width=300)),
+                div(style="display:inline-block",plotOutput("gh_rr3",width=300)),
                 div(style="display:inline-block",plotOutput("gh_rr2",width=300)),
-                div(style="display:inline-block",plotOutput("gh_rr3",width=300))
+                div(style="display:inline-block",plotOutput("gh_rr_117",width=300)),
+                div(style="display:inline-block",plotOutput("gh_rr1",width=300)),
+                div(style="display:inline-block",plotOutput("gh_rr_13",width=300)),
+                div(style="display:inline-block",plotOutput("gh_tinker",width=300)),
+                div(style="display:inline-block",plotOutput("gh_tinker_columbia",width=300)),
+                div(style="display:inline-block",plotOutput("gh_lick_run",width=300)),
+                div(style="display:inline-block",plotOutput("gh_tinker_glade",width=300))
             )
     ),
-    
-    tabItem(tabName="Help",
-            div(style="display:inline-block", h3("Download User Manual:")),
-            div(style="display:inline-block",downloadButton("manual_download","Download")),
-            HTML('<b> <p> \n Help Buttons, indicated by "?" symbols, are placed throughout the SHARKS app to provide information regarding the various inputs, outputs, and options. <p> <b>'),
-            HTML("<b> <p> \n For questions, please contact the app developers at cbrendel@vt.edu <p> <b>")
-    )
+    tabItem(tabName="Sediment",
+            div(style="position:relative;",
+              plotOutput("SSC_plot",hover=hoverOpts("SSC_hover",delay=100,delayType="debounce"),height=250),
+              uiOutput("SSC_hover") # Put plot and tooltip in div or else the tooltip won't be in the correct position
+            ),
+            hidden(div(id="loads",
+                 div(style="position:relative;",
+                     plotOutput("Flow_plot",hover=hoverOpts("Flow_hover",delay=100,delayType="debounce"),height=150),
+                     uiOutput("Flow_hover") # Put plot and tooltip in div or else the tooltip won't be in the correct position
+                 ),
+                 div(style="position:relative;",
+                     plotOutput("SS_Load_plot",hover=hoverOpts("Load_hover",delay=100,delayType="debounce"),brush=brushOpts("load_brush",direction="x"),height=250),
+                     uiOutput("Load_hover") # Put plot and tooltip in div or else the tooltip won't be in the correct position
+                 ),
+                div(div(style="display:inline-block", h4(tags$b("Total Sediment Loads:"))),div(style="display:inline-block",actionButton("help_loads",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;padding-right:20px;border:none;background:none")),div(style="display:inline-block",downloadButton("loads_download","Download"))),
+                dataTableOutput("SS_table"),
+                div(style="text-align:center",HTML(paste0('</br><b><a href="https://docs.google.com/spreadsheets/d/',SSC_sheet,'" target="_blank">Discharge-Turbidity-SSC Relationship Table</a></b>')))
+            ))
+            )
   )
 )
 
 # Combine sidebar and body into a dashboardPage
 ui=dashboardPage(title="SHARKS",
-  dashboardHeader(title=div(tags$a(tags$img(src='Shark.png', height='55', width='60'),HTML('</span> <font color="white" size="5"> <b> SHARKS </b>  </font> ')))),
+  dashboardHeader(title=div(tags$a(tags$img(src='Shark.png', height='42', width='60'),HTML('</span> <font color="white" size="5"> <b> SHARKS </b>  </font> ')))),
   sidebar,
   body
 )
@@ -483,15 +502,29 @@ ui=dashboardPage(title="SHARKS",
 
 ### Define Server Logic __________________________________________________________________________________________________________________________
 server=function(input, output,session) {
-  ### Workaround to avoid shinyaps.io URL problems
-  observe({
-    if (rv$login) {
-      shinyjs::onclick("gauth_login-googleAuthUi",
-                       shinyjs::runjs("window.location.href = 'removed_redirect_URL';")) # Add redirect URL here if you add client id and secret to retrieve storm sewer data stored in Google Sheets
-    }
-  })
+  ### Debounce Inputs
+  USGS_Precip=reactive(input$USGS_Precip)%>%debounce(3000)
+  USGS_Site=reactive(input$USGS_Site)%>%debounce(3000)
+  parameterCd=reactive(input$parameterCd)%>%debounce(3000)
+  user.faaid=reactive(input$user.faaid)%>%debounce(3000)
+  user.network=reactive(1) # ASOS=1; added here for future compatibility with AWOS network
+  HOBO_sensor=reactive(input$HOBO_sensor)%>%debounce(3000)
   
   ### Reactive User Interface
+  observe({shinyalert(title="Please Note:",
+                      text='<b> SHARKS uses USGS data that is provisional and subject to revision:</b>
+                      <br /> <a href="https://water.usgs.gov/data/provisional.html" target="_blank">USGS Provisional Data Statment</a>',
+                      html=T,
+                      closeOnClickOutside = T,
+                      closeOnEsc = T,
+                      type="warning",
+                      timer=0)})
+  
+  # Set/Update Date Range  ---------------------------------------------------
+  date_start=reactive({input$PrecipDate[1]})%>%debounce(2000) # Apply delay so app doesn't immediately calculate everything in case user is still adjusting date
+  
+  date_end=reactive({input$PrecipDate[2]})%>%debounce(2000) # Apply delay so app doesn't immediately calculate everything in case user is still adjusting date
+  
   # Update DateRange so you can't select Start Date prior to End Date or End date prior to Start Date
   dates=reactiveValues(start_cur=0,end_cur=0) # Create list to store reactive values in and assign values an initial value
   
@@ -506,30 +539,30 @@ server=function(input, output,session) {
     
     # If start date was changed, then update end date if end date is prior to start date
     if(dates$start_old!=dates$start_cur&input$PrecipDate[1]>input$PrecipDate[2]){
-        updateDateRangeInput(session,"PrecipDate", end=input$PrecipDate[1])
+      updateDateRangeInput(session,"PrecipDate", end=input$PrecipDate[1])
     }
     
     # If end date was changed, then update start date if end date is prior to start date
     if(dates$end_old!=dates$end_cur&input$PrecipDate[2]<input$PrecipDate[1]){
-        updateDateRangeInput(session,"PrecipDate", start=input$PrecipDate[2])
+      updateDateRangeInput(session,"PrecipDate", start=input$PrecipDate[2])
     }
   })
   
   # Select which rain gauge to plot on hyetograph
   #  -if user enters a precip site that isn't in the key, then return option based on ID name
   plot_site=reactive({
-    if(is.null(unlist(precip_site_key[input$user.faaid],use.names = F))==TRUE){
-      choices=unlist(input$user.faaid)
+    if(is.null(unlist(precip_site_key[user.faaid()],use.names = F))==TRUE){
+      choices=unlist(user.faaid())
     }
     else{
-      choices=unlist(precip_site_key[input$user.faaid],use.names = F)
+      choices=unlist(precip_site_key[user.faaid()],use.names = F)
     }
-    for(site in 1:length(input$USGS_Precip)){
-      if(is.null(unlist(precip_site_key[input$USGS_Precip[site]],use.names = F))==TRUE){
-        choices=c(choices,input$USGS_Precip[site])
+    for(site in 1:length(USGS_Precip())){
+      if(is.null(unlist(precip_site_key[USGS_Precip()[site]],use.names = F))==TRUE){
+        choices=c(choices,USGS_Precip()[site])
       }
       else{
-        choices=c(choices,unlist(precip_site_key[input$USGS_Precip[site]],use.names = F))
+        choices=c(choices,unlist(precip_site_key[USGS_Precip()[site]],use.names = F))
       }
     }
     choices
@@ -556,25 +589,17 @@ server=function(input, output,session) {
   })
   
   # Select which precipitation gauge to plot on hyetograph
-  output$Box1=renderUI(selectInput("user.gauge",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Precipitation Gauge")),div(style="display:inline-block",actionButton("help_plot_precip",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), choices=plot_site(), multiple=FALSE,selected=plot_site()[2])) # Sets default plot gauge to the first USGS precip site. To set default to NOAA gauge then set select=input$user.faaid
+  output$Box1=renderUI(selectInput("user.gauge",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Precipitation Gauge")),div(style="display:inline-block",actionButton("help_plot_precip",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), choices=plot_site(), multiple=FALSE,selected=plot_site()[2])) # Sets default plot gauge to the first USGS precip site. To set default to NOAA gauge then set select=user.faaid()
   
   # Select which water quality parameter to plot on secondary axis
-  output$Box2=renderUI(selectInput("user.wq",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Parameter")),div(style="display:inline-block",actionButton("help_plot_parameter",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),choices=c("None",unlist(wq_key[input$parameterCd],use.names=F)),multiple=FALSE,selected="None"))
-  
-  # Input Watersed Area and choose all watersheds
-  output$Box3=renderUI(selectizeInput("WS_Area_ac", label=div(div(style="font-size:115%;display:inline-block",tags$b("Watershed Area (Acres)")),div(style="display:inline-block",actionButton("help_area",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))), choices=unlist(watershed_area_key[input$USGS_Site],use.names=F),multiple=TRUE,options=list(create=TRUE,placeholder="Enter Area")))
-
-  observe({
-    selected_choices=unlist(watershed_area_key[input$USGS_Site],use.names=F)
-    updateSelectizeInput(session,inputId="WS_Area_ac",selected=selected_choices)
-  })
+  output$Box2=renderUI(selectInput("user.wq",label=div(div(style="font-size:115%;display:inline-block",tags$b("Plot Parameter")),div(style="display:inline-block",actionButton("help_plot_parameter",label="",icon=icon("question"),style="height:0px;width:0px;padding:0px;border:none;background:none"))),choices=c("None",unlist(wq_key[parameterCd()],use.names=F)),multiple=FALSE,selected="None"))
   
   # Choose which Precip Station to graph with HOBO data
-  output$Box4=renderUI(selectInput("HOBO.gauge",label=div(div(style="display:inline-block",tags$b("Storm Sewer Plot Precipitation Gauge")),div(style="display:inline-block",actionButton("help_hobo_precip",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))), choices=plot_site(), multiple=FALSE,selected=plot_site()[2])) # Sets default plot gauge to the first USGS precip site. To set default to NOAA gauge then set select=input$user.faaid
+  output$Box4=renderUI(selectInput("HOBO.gauge",label=div(div(style="display:inline-block",tags$b("Storm Sewer Plot Precipitation Gauge")),div(style="display:inline-block",actionButton("help_hobo_precip",label="",icon=icon("question-circle"),class="help-button",style="height:0px;width:0px;padding:0px;padding-bottom:25px;border:none;background:none"))), choices=plot_site(), multiple=FALSE,selected=plot_site()[2])) # Sets default plot gauge to the first USGS precip site. To set default to NOAA gauge then set select=user.faaid()
   
   # Choose which Precip Station to get PFDS
   options=reactive({
-    sites=as.list(input$USGS_Precip)
+    sites=as.list(USGS_Precip())
     unlist(rapply(sites,function(x)ifelse(x%in%names(precip_site_key),unlist(precip_site_key[x],use.names=F),x),how="replace")) #rename list elements with location description if the sites are in Roanoke
   }) 
 
@@ -591,19 +616,19 @@ server=function(input, output,session) {
     }
   })
   
-  # Show/Hide Extra Settings
-  observe({
-    if(input$show_hide==1){
-      shinyjs::show(id="extra")
-      }
-    else{
-      shinyjs::hide(id="extra")
-      }
-  })
+  # # Show/Hide Extra Settings
+  # observe({
+  #   if(input$show_hide==1){
+  #     shinyjs::show(id="extra")
+  #     }
+  #   else{
+  #     shinyjs::hide(id="extra")
+  #     }
+  # })
   
   # Show/Hide FAA ID Table
   observe({
-    if(is.null(input$user.faaid)||input$user.faaid==""){
+    if(is.null(user.faaid())||user.faaid()==""){
       shinyjs::show(id="FAA")
       shinyjs::hide(id="Summary_Tab")
     }
@@ -625,52 +650,56 @@ server=function(input, output,session) {
     }
   })
   
-  # Show/Hide Authentification Message and HOBO Stuff
-  observe({
-    if(rv$login==F){
-      shinyjs::show(id="auth")
-      shinyjs::hide(id="HOBO")
-    }
-    else{
-      shinyjs::hide(id="auth")
-      shinyjs::show(id="HOBO")
-    }
-  })
-  
   # Show/Hide Flood Stage Plots
   observe({
-    if("00065"%in%input$parameterCd){
-      if(any(c("0205551460","02055000","02055100","02054530","02054500")%in%input$USGS_Site)==F){
+    if("00065"%in%parameterCd()){
+      if(any(c("0205551460","02055000","02055100","02054530","02054500","02054750","02055080","02055379","0205551614")%in%USGS_Site())==F){
         shinyjs::hide(id="flood")
       } else{
         shinyjs::show(id="flood")
       }
       
-      if("0205551460"%in%input$USGS_Site){
+      if("0205551460"%in%USGS_Site()){
         shinyjs::show(id="lick_run")
       } else{shinyjs::hide(id="lick_run")}
       
-      if("02055000"%in%input$USGS_Site){
+      if("02055000"%in%USGS_Site()){
         shinyjs::show(id="rr1")
       } else{shinyjs::hide(id="rr1")}
       
-      if("02055100"%in%input$USGS_Site){
+      if("02055100"%in%USGS_Site()){
         shinyjs::show(id="tinker")
       } else{shinyjs::hide(id="tinker")}
       
-      if("02054530"%in%input$USGS_Site){
+      if("02054530"%in%USGS_Site()){
         shinyjs::show(id="rr2")
       } else{shinyjs::hide(id="rr2")}
       
-      if("02054500"%in%input$USGS_Site){
+      if("02054500"%in%USGS_Site()){
         shinyjs::show(id="rr3")
       } else{shinyjs::hide(id="rr3")}
+      
+      if("02054750"%in%USGS_Site()){
+        shinyjs::show(id="rr_117")
+      } else{shinyjs::hide(id="rr_117")}
+
+      if("02055080"%in%USGS_Site()){
+        shinyjs::show(id="rr_13")
+      } else{shinyjs::hide(id="rr_13")}
+
+      if("02055379"%in%USGS_Site()){
+        shinyjs::show(id="tinker_columbia")
+      } else{shinyjs::hide(id="tinker_columbia")}
+
+      if("0205551614"%in%USGS_Site()){
+        shinyjs::show(id="tinker_glade")
+      } else{shinyjs::hide(id="tinker_glade")}
     } 
     else{
       shinyjs::hide(id="flood")
     }
   })
-  
+
   ### Define Functions
   
   # Define Setnames function to update column names even if certain column names are absent
@@ -700,19 +729,15 @@ server=function(input, output,session) {
   ### Create Keys
     
   # USGS Flow Sites
-  flow_site_key=vector(mode="list",length=10)
-  names(flow_site_key)=c("0205551460","02055000","02054530","02054500","02055100")
-  flow_site_key[[1]]="Lick Run";flow_site_key[[2]]="Roanoke River at Roanoke";flow_site_key[[3]]="Roanoke River at Glenvar";flow_site_key[[4]]="Roanoke River at Lafayette";flow_site_key[[5]]="Tinker Creek"
+  flow_site_key=vector(mode="list",length=9)
+  names(flow_site_key)=c("0205551460","02055000","02054530","02054500","02055100","02054750","02055080","02055379","0205551614")
+  flow_site_key[[1]]="Lick Run";flow_site_key[[2]]="Roanoke River at Roanoke";flow_site_key[[3]]="Roanoke River at Glenvar";flow_site_key[[4]]="Roanoke River at Lafayette";flow_site_key[[5]]="Tinker Creek near Daleville";flow_site_key[[6]]="Roanoke River at Route 117";flow_site_key[[7]]="Roanoke River at 13th St.";flow_site_key[[8]]="Tinker Creek at Columbia St.";flow_site_key[[9]]="Tinker Creek above Glade Creek"
   
-  # USGS Flow Site Watershed Area
-  watershed_area_key=vector(mode="list",length=2)
-  names(watershed_area_key)=c("0205551460","02055000")
-  watershed_area_key[[1]]="Lick Run (3,544)";watershed_area_key[[2]]="Roanoke River at Roanoke (245,683)"
+  # Override Watershed Area for USGS Sites
+  watershed_area_key=vector(mode="list",length=1)
+  names(watershed_area_key)=c("0205551460")
+  watershed_area_key[[1]]=154376640
   
-  watershed_area_key2=vector(mode="list",length=2)
-  names(watershed_area_key2)=c("Lick Run (3,544)","Roanoke River at Roanoke (245,683)")
-  watershed_area_key2[[1]]=(154376640/43560);watershed_area_key2[[2]]=(10701969855/43560)
-
   # USGS Precip Sites
   precip_site_key=vector(mode="list",length=10)
   names(precip_site_key)=c("0205551460","371840079534900","371824080002600","371709079580800","371657080002800","371518079591700","371339079554400","371520080015100","371459079560300","ROA")
@@ -776,22 +801,22 @@ server=function(input, output,session) {
   # USGS Precip
   observeEvent(input$help_usgs_precip,{shinyalert("USGS Precip. Station IDs",
                                           type="info",
-                                          text="This input allows users to select the USGS meteorological station they wish to retrieve precipitation data from. The nine USGS stations located in Roanoke are pre-loaded into SHARKS and can be selected by clicking the station description in the drop-down list. A map depicting the spatial location of these stations is included on the SHARKS Summary Tab.
+                                          text="This input allows users to select the USGS meteorological station they wish to retrieve precipitation data from. The nine USGS stations located in Roanoke are pre-loaded into SHARKS and can be selected by clicking the station description in the drop-down list.
                                             
                                             Precipitation data can also be retrieved from USGS stations located outside of Roanoke by entering the USGS ID number of the desired station in the input box."
                                           )})
   # USGS Flow
   observeEvent(input$help_usgs_flow,{shinyalert("USGS Stream Station IDs",
                                           type="info",
-                                          text="This input allows users to select the USGS stream station they wish to retrieve discharge and/or water quality data from. The Lick Run and Roanoke River USGS stations located in Roanoke are pre-loaded into SHARKS and can be selected by clicking the station description in the drop-down list.
+                                          text="This input allows users to select the USGS stream station they wish to retrieve discharge and/or water quality data from. Five Roanoke USGS stations are pre-loaded into SHARKS and can be selected by clicking the station description in the drop-down list.
                                                   
                                             Discharge/Water Quality data can also be retrieved from USGS stations located outside of Roanoke by entering the USGS ID number of the desired station in the input box."
                                           )})
   # Watershed Area
-  observeEvent(input$help_area,{shinyalert("Watershed Area",
-                                          type="info",
-                                          text='The watershed area is used to calculate the depth of direct runoff for each USGS stream flow station. If the user selects one of the Roanoke streamflow stations, then the watershed area input automatically populates. However, if users have manually entered a station in the "USGS Stream Station IDs" input, then they must also manually enter the watershed area in acres for the station. The order of the stations in the "USGS Stream Station IDs" input must match the order of the areas in the "Watershed Area" input.'
-                                          )})
+  # observeEvent(input$help_area,{shinyalert("Watershed Area",
+  #                                         type="info",
+  #                                         text='The watershed area is used to calculate the depth of direct runoff for each USGS stream flow station. If the user selects one of the Roanoke streamflow stations, then the watershed area input automatically populates. However, if users have manually entered a station in the "USGS Stream Station IDs" input, then they must also manually enter the watershed area in acres for the station. The order of the stations in the "USGS Stream Station IDs" input must match the order of the areas in the "Watershed Area" input.'
+  #                                         )})
   # Download Parameters
   observeEvent(input$help_parameters,{shinyalert("Download Parameters",
                                           type="info",
@@ -946,167 +971,167 @@ server=function(input, output,session) {
                                           text='These plots display the most recent gauge height measurements for Roanoke stream stations relative to the National Weather Service flood thresholds. The bar chart data labels indicate the most recent gauge heights (ft) recorded as well as the date/time in which they were recorded.'
   )})
   
-  
-  ### 1) Download Data from ISU Mesonet ----------------------------------------------------------------------------------------------------------
-  ## Web GUI here: https://mesonet.agron.iastate.edu/request/download.phtml?network=VA_ASOS
-  ## Adapted from https://github.com/realmiketalbot/R-scripts/blob/master/iem_scraper_example.r
-  
-  # Convert Input Start Date
-  date1=reactive({
-    ISOdate(as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[1], as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[2], as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[3])
-  })
-  
-  # Convert Input End Date
-  date2=reactive({
-    ISOdate(as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[1], as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[2], as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[3])
-  })
-  
-  # Create URL to access data
-  service=reactive({
-    str_c("https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?","data=all&tz=",
-          input$user.tz,
-          "&format=comma&latlon=yes&",
-          "year1=", as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[1], 
-          "&month1=",as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[2],
-          "&day1=",as.integer(strsplit(toString(input$PrecipDate[1]),"-")[[1]])[3],
-          "&",
-          "year2=",as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[1],
-          "&month2=",as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[2],
-          "&day2=",as.integer(strsplit(toString(input$PrecipDate[2]),"-")[[1]])[3],
-          "&",
-          sep="")
-  })
-  
-  # Create string of states
-  states= c("AK AL AR AZ CA CO CT DE FL GA ")
-  states= str_c(states,"HI IA ID IL IN KS KY LA MA MD ")
-  states= str_c(states,"ME MI MN MO MS MT NC ND NE NH ")
-  states= str_c(states,"NJ NM NV NY OH OK OR PA RI SC ") 
-  states= str_c(states,"SD TN TX UT VA VT WA WI WV WY")
-  
-  # Split string of states into character list
-  states=unlist(strsplit(states, " "))
-  
-  # Creates list of state abbreviations with ASOS ending; ex. "VA_ASOS"
-  networks="AWOS"
-  for (i in 1:length(states)) {
-    networks[i+1] = str_c(states[i], "_ASOS", sep="")
-  }
-  
-  # Grab the network for the state entered by the user; ex. selectes "VA_ASOS" from list
-  network_type=reactive({
-    if (as.double(input$user.network) == 1){
-      network_type="ASOS"
-    }
-  })
+  # Total Sediment Loads
+  observeEvent(input$help_loads,{shinyalert("Total Sediment Loads",
+                                                type="info",
+                                                text='Users can "Brush" data in the sediment loads graph by clicking and dragging a box around the desired data. The total sediment load for each station for the "Brushed" time period, calculated via trapezoidal integration, is displayed in this table. Data within this table can be sorted by clicking on the column titles. 
+                                          
+                                          The "Brushed" time period and the data in the table can be refined by either drawing a new box or by resizing the box by hovering the cursor on the edges of the box until a double-sided arrow appears and then clicking and dragging the edges. The box can also be moved by clicking and dragging the middle of the box.'
+  )})
 
-  selected_network=reactive(networks)
-  selected_network=reactive({
-    if (as.double(input$user.network) == 1){
-      selected_network=networks[which(networks %in% str_c(input$user.state, "_", network_type()))]
-    } else {
-      selected_network=subset(networks %in% str_c(network_type()))
-    }
-  })
+  Site=reactiveVal()
+  P_Inc_in=reactiveVal()
+  noaa_latlon=reactiveValues(lat=0,lon=0)
   
-  ### Retrieve data for the specified airport site
-  
-  #Get Metadata
-  jdict=reactive(jsonlite::fromJSON(url(str_c("https://mesonet.agron.iastate.edu/geojson/network/", selected_network(), ".geojson", sep=""))))
-  
-  # Get List of Stations if FAA ID field is Blank
-  Site=reactive({
-    if(input$user.faaid == ""){
-      jdict()$features$properties[c("sname","sid")]
-    }
-    else{Site=input$user.faaid}
-  })
-  
-  # Find site matching input FAA ID
-  rownum=reactive({which(jdict()$features$properties$sid==input$user.faaid)}) ## this works to get row number of matching site id
-  
-  # Get Site Name for entered FAA ID
-  sitename=reactive({jdict()$features$properties$sname[rownum()]})
-  
-  # Get URL for data
-  uri=reactive({str_c(toString(service()),"station=",toString(input$user.faaid))})
-  
-  # Retreive data from URL
-  iadata=reactive({fread(str_c(uri()))})
-  
-  ### 2) Parse ISU data and format ---------------------------------------------------------------------------------------------------------------
-  DateTime=reactive({as.POSIXct(iadata()$valid, origin = "1970-01-01 00:00.00 UTC")}) # Converts text to date
-  DateNumeric=reactive({as.numeric(DateTime())}) # Converts date to numeric
-
-  P_Raw_in=reactive(as.numeric(unlist(strsplit(gsub("NA","0",toString(as.numeric(iadata()$p01i))),",")))) # Gets Precip Data & replaces NA precipitation values with 0
-  
-  ### The P_Raw_in is cumulative precipitation totals that resets on the hour and sometimes other increments. 
-  ### This code extracts incremental depths and calculates total rainfall for the period
-
-  NOAAminute=reactive(minute(DateTime())) # Get Minute for each Date/Time Value
-
-  # Loop to get Incremental Precipitation
-  P_Inc_in=reactive({
-    P_Inc_value=numeric(length(P_Raw_in()))
-    P_Inc_value[1]=P_Raw_in()[1]
+  NOAA=eventReactive(c(date_end(),user.faaid()),{
     
-    for (j in 2:length(P_Raw_in())){
-      if (NOAAminute()[j] > NOAAminute()[j-1]){
-      #sometimes P_Raw_in resets NOT on the hour...this catches that
-        if(P_Raw_in()[j] >= P_Raw_in()[j-1]){
-          P_Inc_value[j]=P_Raw_in()[j] - P_Raw_in()[j-1] # If the cumulative precip depth at time=t2 is greater than or equal to the cumulative precip depth at time=t1, incremental precip = difference between the two readings
-        } else {
-          P_Inc_value[j]=P_Raw_in()[j] # If the cumulative precip depth at time=t2 is less than the cumulative precip depth at time=t1, then the depth reset and incremental precip = raw precip
+    ### 1) Download Data from ISU Mesonet ----------------------------------------------------------------------------------------------------------
+    ### adapted from python code here: https://github.com/akrherz/iem/blob/master/scripts/asos/iem_scraper_example.py
+    ### modified to download data for a single ASOS station specified below
+    ### code block from: https://github.com/realmiketalbot/R-scripts/blob/master/iem_scraper_example.r
+    ### Web GUI here: https://mesonet.agron.iastate.edu/request/download.phtml?network=VA_ASOS
+    
+    # Convert Dates
+    date1=ISOdate(as.integer(strsplit(toString(date_start()),"-")[[1]])[1], as.integer(strsplit(toString(date_start()),"-")[[1]])[2], as.integer(strsplit(toString(date_start()),"-")[[1]])[3])
+    date2=ISOdate(as.integer(strsplit(toString(date_end()),"-")[[1]])[1], as.integer(strsplit(toString(date_end()),"-")[[1]])[2], as.integer(strsplit(toString(date_end()),"-")[[1]])[3])
+    
+    # Create URL
+    service=str_c("https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py?","data=all&tz=",
+                    input$user.tz,
+                    "&format=comma&latlon=yes&",
+                    "year1=", as.integer(strsplit(toString(date_start()),"-")[[1]])[1], 
+                    "&month1=",as.integer(strsplit(toString(date_start()),"-")[[1]])[2],
+                    "&day1=",as.integer(strsplit(toString(date_start()),"-")[[1]])[3],
+                    "&",
+                    "year2=",as.integer(strsplit(toString(date_end()),"-")[[1]])[1],
+                    "&month2=",as.integer(strsplit(toString(date_end()),"-")[[1]])[2],
+                    "&day2=",as.integer(strsplit(toString(date_end()),"-")[[1]])[3],
+                    "&",
+                    sep="")
+    
+    # Create string of states
+    states= c("AK AL AR AZ CA CO CT DE FL GA ")
+    states= str_c(states,"HI IA ID IL IN KS KY LA MA MD ")
+    states= str_c(states,"ME MI MN MO MS MT NC ND NE NH ")
+    states= str_c(states,"NJ NM NV NY OH OK OR PA RI SC ") 
+    states= str_c(states,"SD TN TX UT VA VT WA WI WV WY")
+    
+    # Split string of states into character list
+    states=unlist(strsplit(states, " "))
+    
+    # Creates list of state abbreviations with ASOS ending; ex. "VA_ASOS"
+    networks="AWOS"
+    for (i in 1:length(states)) {
+      networks[i+1] = str_c(states[i], "_ASOS", sep="")
+    }
+    
+    # Grab the network for the state entered by the user; ex. selectes "VA_ASOS" from list
+    if(as.double(user.network())==1){network_type="ASOS"}
+    
+    if(as.double(user.network())==1){
+      selected_network=networks[which(networks %in% str_c(input$user.state, "_", network_type))]
+    } else {
+      selected_network=subset(networks %in% str_c(network_type))
+    }
+    
+    ### Retrieve data for the specified airport site
+    
+    #Get Metadata
+    jdict=jsonlite::fromJSON(url(str_c("https://mesonet.agron.iastate.edu/geojson/network/", selected_network, ".geojson", sep="")))
+    
+    # Get List of Stations if FAA ID field is Blank
+    if(user.faaid() == ""){
+      Site(jdict$features$properties[c("sname","sid")])
+    }
+    else{Site(user.faaid())}
+    
+    # Find site matching input FAA ID
+    rownum=which(jdict$features$properties$sid==user.faaid()) ## this works to get row number of matching site id
+    
+    # Get Site Name for entered FAA ID
+    sitename=jdict$features$properties$sname[rownum]
+    
+    # Get URL for data
+    uri=str_c(toString(service),"station=",toString(user.faaid()))
+    
+    # Retreive data from URL
+    iadata=fread(str_c(uri))
+    
+    noaa_latlon$lat=iadata$lat[1]
+    noaa_latlon$lon=iadata$lon[1]
+    
+    ### 2) Parse ISU data and format ---------------------------------------------------------------------------------------------------------------
+    DateTime=as.POSIXct(iadata$valid, origin = "1970-01-01 00:00.00 UTC") # Converts text to date
+    DateNumeric=as.numeric(DateTime) # Converts date to numeric
+    
+    P_Raw_in=as.numeric(unlist(strsplit(gsub("NA","0",toString(as.numeric(iadata$p01i))),","))) # Gets Precip Data & replaces NA precipitation values with 0
+    
+    ### The P_Raw_in is cumulative precipitation totals that resets on the hour and sometimes other increments. 
+    ### This code extracts incremental depths and calculates total rainfall for the period
+    
+    NOAAminute=minute(DateTime) # Get Minute for each Date/Time Value
+    
+    # Loop to get Incremental Precipitation
+    P_Inc_in=({
+      P_Inc_value=numeric(length(P_Raw_in))
+      P_Inc_value[1]=P_Raw_in[1]
+      
+      for (j in 2:length(P_Raw_in)){
+        if (NOAAminute[j] > NOAAminute[j-1]){
+          #sometimes P_Raw_in resets NOT on the hour...this catches that
+          if(P_Raw_in[j] >= P_Raw_in[j-1]){
+            P_Inc_value[j]=P_Raw_in[j] - P_Raw_in[j-1] # If the cumulative precip depth at time=t2 is greater than or equal to the cumulative precip depth at time=t1, incremental precip = difference between the two readings
+          } else {
+            P_Inc_value[j]=P_Raw_in[j] # If the cumulative precip depth at time=t2 is less than the cumulative precip depth at time=t1, then the depth reset and incremental precip = raw precip
+          }
+        }
+        else{
+          P_Inc_value[j]=P_Raw_in[j] # If there is no change in time, then incremental precip = raw precip
         }
       }
-      else{
-        P_Inc_value[j]=P_Raw_in()[j] # If there is no change in time, then incremental precip = raw precip
-      }
-    }
-    P_Inc_value
-  })
-
-  
-  #  Create data table for NOAA Precipitation Data & Calculate Precipitation Intensity
-  
-  #  - use as.character for Date/Time to get it to display properly since xtable doesn't play nice with dates/Shiny
-  NOAA=reactive({
-    NOAA_value=data.table(Precip_Inst=P_Inc_in(),Char_Date=as.character(DateTime()),dateTime=DateTime())
+      P_Inc_in(P_Inc_value)
+      P_Inc_value
+    })
+    
+    #  Create data table for NOAA Precipitation Data & Calculate Precipitation Intensity
+    
+    #  - use as.character for Date/Time to get it to display properly since xtable doesn't play nice with dates/Shiny
+    NOAA_value=data.table(Precip_Inst=P_Inc_in,Char_Date=as.character(DateTime),dateTime=DateTime)
     
     NOAA_value$dt_min=NA
     NOAA_value$dt_min[-1]=diff(NOAA_value$dateTime)
     NOAA_value$i_inhr=NOAA_value$Precip_Inst/(NOAA_value$dt_min / 60)
     
     NOAA_value=subset(NOAA_value,select=c("Char_Date","Precip_Inst","i_inhr"))
-    setnames(NOAA_value, old = c("Precip_Inst","i_inhr"), new = c(paste(toString(input$user.faaid),"Precip_Inst",sep="_"),paste(toString(input$user.faaid),"i_inhr",sep="_")))
+    setnames(NOAA_value, old = c("Precip_Inst","i_inhr"), new = c(paste(toString(user.faaid()),"Precip_Inst",sep="_"),paste(toString(user.faaid()),"i_inhr",sep="_")))
     NOAA_value
   })
 
   ### 3) Get USGS Precipitation Data; downloads data from 0:00 local time for the site. time zone parameter (tz) just adjusts the time of the same data
   
-  USGS_precip=reactive({
+  USGS_precip=eventReactive(c(date_end(),USGS_Precip()),{
     counter=1
     # Loop through each USGS station
-    for(site in input$USGS_Precip){
+    for(site in USGS_Precip()){
       # If the start date and end date are't the same, then NOAA does 0:00 Date 1 - 0:00 Date 2 whereas USGS does 0:00 Date 1 - 24:00 Date 2. This sets both to retrieve to 0:00 Date 2   
-      if(input$PrecipDate[2]==input$PrecipDate[1]){
+      if(date_end()==date_start()){
         
         # USGS UTC time zone code is different from NOAA UTC time zone code. This addresses that
         if(input$user.tz=="Etc/UTC"){
           USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = "00045", 
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2],tz="UTC"))}
+                                                  startDate = date_start(), endDate = date_end(),tz="UTC"))}
         else{
           USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = "00045", 
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2],tz=input$user.tz))
+                                                  startDate = date_start(), endDate = date_end(),tz=input$user.tz))
         }
       }
       else{
         if(input$user.tz=="Etc/UTC"){
           USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = "00045",
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2]-1,tz="UTC"))}
+                                                  startDate = date_start(), endDate = date_end()-1,tz="UTC"))}
         else{
           USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = "00045",
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2]-1,tz=input$user.tz))
+                                                  startDate = date_start(), endDate = date_end()-1,tz=input$user.tz))
         }
       } 
       
@@ -1130,31 +1155,31 @@ server=function(input, output,session) {
   
   ### 4) Get USGS Flow & Water Quality Data; downloads data from 0:00 local time for the site. time zone parameter (tz) just adjusts the time of the same data
   
-  USGS=reactive({
+  USGS=eventReactive(c(date_end(),USGS_Site(),parameterCd()),{
     counter=1
     # store_value=data.table(site_no=character()) # Want to create different columns for the data from each station; this variable stores the data downloaded from each site
     
     # Loop through each USGS station
-    for(site in input$USGS_Site){
+    for(site in USGS_Site()){
       # If the start date and end date are't the same, then NOAA does 0:00 Date 1 - 0:00 Date 2 whereas USGS does 0:00 Date 1 - 24:00 Date 2. This sets both to retrieve to 0:00 Date 2   
-      if(input$PrecipDate[2]==input$PrecipDate[1]){
+      if(date_end()==date_start()){
         
         # USGS UTC time zone code is different from NOAA UTC time zone code. This addresses that
         if(input$user.tz=="Etc/UTC"){
-          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = input$parameterCd, 
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2],tz="UTC"))}
+          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = parameterCd(), 
+                                                  startDate = date_start(), endDate = date_end(),tz="UTC"))}
         else{
-          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = input$parameterCd, 
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2],tz=input$user.tz))
+          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = parameterCd(), 
+                                                  startDate = date_start(), endDate = date_end(),tz=input$user.tz))
         }
       }
       else{
         if(input$user.tz=="Etc/UTC"){
-          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = input$parameterCd,
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2]-1,tz="UTC"))}
+          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = parameterCd(),
+                                                  startDate = date_start(), endDate = date_end()-1,tz="UTC"))}
         else{
-          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = input$parameterCd,
-                                                  startDate = input$PrecipDate[1], endDate = input$PrecipDate[2]-1,tz=input$user.tz))
+          USGS_value=renameNWISColumns(readNWISuv(siteNumbers = site, parameterCd = parameterCd(),
+                                                  startDate = date_start(), endDate = date_end()-1,tz=input$user.tz))
         }
       } 
       
@@ -1162,11 +1187,11 @@ server=function(input, output,session) {
       if (nrow(USGS_value)==0){USGS_value=data.table(agency_cd="USGS",site_no=paste(toString(site)),dateTime=as.POSIXct(NA, origin = "1970-01-01 00:00.00 UTC"))}
 
       # Add USGS Station Number to Column Names in Data - Use Setnames function defined above in case certain column names are absent
-      Setnames(USGS_value, unlist(combine_key[input$parameterCd],use.names=F), paste(toString(site),unlist(combine_key[input$parameterCd],use.names=F),sep="_"),allow.absent.cols=T)
+      Setnames(USGS_value, unlist(combine_key[parameterCd()],use.names=F), paste(toString(site),unlist(combine_key[parameterCd()],use.names=F),sep="_"),allow.absent.cols=T)
 
       if (counter==1){store_value=USGS_value}
       else{store_value=full_join(x=store_value,y=USGS_value, by="dateTime")} # combine data from each USGS station into one datatable
-      
+
       counter=counter+1
 
     }
@@ -1178,32 +1203,48 @@ server=function(input, output,session) {
   })
   
   ### 5) Combine USGS Data into one Table & Perform Calculations
-  combine_table=reactive({
+  
+  # Retrieve watershed areas in square feet
+  areas=reactive({
     
+    # Retrieve watershed areas in square miles
+    site_info=readNWISsite(USGS_Site())
+    site_info=site_info[,c("site_no","drain_area_va")]
+    site_info$drain_area_va=site_info$drain_area_va*27878400 # Convert from square miles to square feet
+    
+    # Override watershed areas for stations in watershed_area_key
+    site_info[which(site_info$site_no%in%names(watershed_area_key)),"drain_area_va"]=unlist(watershed_area_key[site_info[which(site_info$site_no%in%names(watershed_area_key)),"site_no"]],use.names=F)
+    
+    site_info
+  })
+  
+  
+  combine_table=reactive({
+
     # Combine Data into One Table
     combine_table_value=full_join(x=USGS(),y=USGS_precip(), by="Char_Date")
-    
+
     # Choose Which Columns are Included
     precip_names=names(select(combine_table_value,ends_with("Precip_Inst")))
     col_list=c("Char_Date",precip_names)
-    
-    for(cd in input$parameterCd){
+
+    for(cd in parameterCd()){
       col_list=c(col_list,names(select(combine_table_value,ends_with(toString(combine_key[cd],use.names=F)))))
     }
 
     combine_table_value=subset(combine_table_value,select=col_list)
-    
+
     # Sort Table by Char_Date
     setorder(combine_table_value,Char_Date)
 
     # Calculate Precipitation Intensity (in/hr)
-    for(site in input$USGS_Precip){
+    for(site in USGS_Precip()){
       new_col_name=paste(site,"i_inhr",sep="_")
       data_col=paste(site,"Precip_Inst",sep="_")
 
       dt=subset(combine_table_value,select=c("Char_Date",data_col))
       dt$dt_min=NA
-      
+
       # Calculate time differential if there is gauge data
       if(nrow(dt)>=2){
         for (i in 2:length(dt$Char_Date)){
@@ -1215,18 +1256,18 @@ server=function(input, output,session) {
 
       combine_table_value[[new_col_name]]=dt[,new_col_name]
     }
-    
+
     # Calculate baseflow using recursive digital filter from Nathan and McMahon (1990)
     counter=1
-    for(site in input$USGS_Site){
+    for(site in USGS_Site()){
       col_name=paste(toString(site),"Flow_Inst",sep="_")
-      
+
       # If flow data doesn't exist for site
       if(!col_name%in%colnames(USGS())){
         USGS_Qvalue=data.table(Char_Date=c(as.character(NA)),Flow_Inst=c(as.numeric(NA)),stormflow_cfs=c(as.numeric(NA)),baseflow_cfs=c(as.numeric(NA)),DRO_Vol_cf=c(as.numeric(NA)),DRO_Depth_in=c(as.numeric(NA)))
         Setnames(USGS_Qvalue, c("Flow_Inst","stormflow_cfs","baseflow_cfs","DRO_Vol_cf","DRO_Depth_in"), c(paste(site,"Flow_Inst",sep="_"),paste(site,"stormflow_cfs",sep="_"),paste(site,"baseflow_cfs",sep="_"),paste(site,"DRO_Vol_cf",sep="_"),paste(site,"DRO_Depth_in",sep="_")),allow.absent.cols=T)
       }
-      
+
       # If flow data exists for site
       else{
         # If column exists but all data is NA
@@ -1237,11 +1278,11 @@ server=function(input, output,session) {
         else{
         USGS_Qvalue=USGS()[complete.cases(USGS()[,paste(toString(site),"Flow_Inst",sep="_")]),]
         USGS_Qvalue=SubsetCols(USGS_Qvalue,c("dateTime",col_name),allow.absent.cols=TRUE)
-  
+
           USGS_Qvalue$DateNumeric=as.numeric(USGS_Qvalue$dateTime)
           USGS_Qvalue$baseflow_cfs=NA; USGS_Qvalue$stormflow_cfs=NA
           passes=3
-          
+
           # Specify alpha values - Nathan & McMahon 1990 range is between 0.90 and 0.95, with 0.95 giving the lowest baseflow
           if(site=="0205551460"){ # Lick Run
             alpha=0.9875
@@ -1250,27 +1291,22 @@ server=function(input, output,session) {
           } else{ # All other sites
             alpha=0.925 # value recommended by Nathan and McMahon 1990
           }
-    
+
           USGS_Qvalue$baseflow_cfs=BaseflowSeparation(USGS_Qvalue[,col_name], filter_parameter = alpha, passes = passes)[,1]
           # USGS_Qvalue$stormflow_cfs=BaseflowSeparation(USGS_Qvalue[,col_name], filter_parameter = alpha, passes = passes)[,2] # If you do this, then baseflow+stormflow doesn't equal total flow
           USGS_Qvalue$stormflow_cfs=USGS_Qvalue[,col_name]-USGS_Qvalue$baseflow_cfs
-    
+
           # Calculate Direct Runoff Volume via Trapezoidal Integration & Calculate Runoff Depth
           USGS_Qvalue$dt_sec=c(NA,as.numeric(diff(USGS_Qvalue$DateNumeric))) #calculate differential time in seconds
           USGS_Qvalue$DRO_Vol_cf=NA
           USGS_Qvalue$DRO_Depth_in=NA
           for(i in 2:dim(USGS_Qvalue)[1]){
             USGS_Qvalue$DRO_Vol_cf[i]=((USGS_Qvalue$stormflow_cfs[i-1] + USGS_Qvalue$stormflow_cfs[i]) / 2) * USGS_Qvalue$dt_sec[i] # Calculate Direct Runoff Volume (ft^3)
-            if(site %in% names(watershed_area_key)){
-              USGS_Qvalue$DRO_Depth_in[i]=((USGS_Qvalue$DRO_Vol_cf[i]/(as.numeric(unlist(watershed_area_key2[input$WS_Area_ac[counter]],use.names = FALSE))*43560)) * 12) # Calculate Direct Runoff Depth (in) <-- if USGS site is in keys
-            }
-            else{
-              USGS_Qvalue$DRO_Depth_in[i]=((USGS_Qvalue$DRO_Vol_cf[i]/(as.numeric(input$WS_Area_ac[counter])*43560)) * 12) # Calculate Direct Runoff Depth (in) <-- if user enters a USGS site that isn't in the keys
-            }
+            USGS_Qvalue$DRO_Depth_in[i]=((USGS_Qvalue$DRO_Vol_cf[i]/(as.numeric(areas()[which(areas()$site_no==site),"drain_area_va"])))*12) # Calculate Direct Runoff Depth (in)
           }
 
         USGS_Qvalue$Char_Date=as.character(USGS_Qvalue$dateTime)
-  
+
         USGS_Qvalue=subset(USGS_Qvalue,select=c("Char_Date","stormflow_cfs","baseflow_cfs","DRO_Vol_cf","DRO_Depth_in"))
         Setnames(USGS_Qvalue, c("stormflow_cfs","baseflow_cfs","DRO_Vol_cf","DRO_Depth_in"), c(paste(site,"stormflow_cfs",sep="_"),paste(site,"baseflow_cfs",sep="_"),paste(site,"DRO_Vol_cf",sep="_"),paste(site,"DRO_Depth_in",sep="_")),allow.absent.cols=T)
       }
@@ -1282,13 +1318,13 @@ server=function(input, output,session) {
 
     # Add baseflow/stormflow to combine data table
     combine_table_value=full_join(x=combine_table_value,y=store_value, by="Char_Date")
-    
+
     # Add NOAA precip data to combine data table
     combine_table_value=full_join(x=combine_table_value,y=NOAA(), by="Char_Date")
-    
+
     # Sort Table by Char_Date again
     setorder(combine_table_value,Char_Date)
-    
+
     combine_table_value
   })
   
@@ -1307,11 +1343,11 @@ server=function(input, output,session) {
   m=setnames(data.table(matrix(c(5,10,15,30,60,120,180,360,720,1440,2880,4320,5760,10080,14400,28800,43200,64800,86400),nrow=19)),old="V1",new="Duration_min")
 
   ## NOAA PFDS
-  NOAA_PFDS=eventReactive(input$user.faaid,{
+  NOAA_PFDS=eventReactive(user.faaid(),{
     
     # Get Latitude & Longitude
-    lat=iadata()$lat[1]
-    lon=iadata()$lon[1]
+    lat=noaa_latlon$lat
+    lon=noaa_latlon$lon
 
     # Create URL for PFDS from NOAA servers
     txtPgURL=paste(cgiLoc, 'fe_text', selTbl, '.csv?', 'lat=', lat, '&lon=', lon, '&type=pf', '&data=', selType, '&units=',selUnits, '&series=', selSeries, sep="")
@@ -1322,12 +1358,12 @@ server=function(input, output,session) {
                new=c("Duration","ARI_1","ARI_2","ARI_5","ARI_10","ARI_25","ARI_50","ARI_100","ARI_200","ARI_500","ARI_1000"))
   
     # # Gets PFDS limits for 90% confidence interval
-    # # PFDS_L90=eventReactive(input$user.faaid,{
+    # # PFDS_L90=eventReactive(user.faaid(),{
     # #   setnames(x=data.table(fread(str_c(txtPgURL()), skip=58)),
     # #                             old=c("V1","V2","V3","V4","V5","V6","V7","V8","V9","V10","V11"),
     # #                             new=c("Duration","ARI_1","ARI_2","ARI_5","ARI_10","ARI_25","ARI_50","ARI_100","ARI_200","ARI_500","ARI_1000"))})
     # # 
-    # # PFDS_U90=eventReactive(input$user.faaid,{setnames(x=data.table(fread(str_c(txtPgURL()), skip=36)),
+    # # PFDS_U90=eventReactive(user.faaid(),{setnames(x=data.table(fread(str_c(txtPgURL()), skip=36)),
     # #                              old=c("V1","V2","V3","V4","V5","V6","V7","V8","V9","V10","V11"),
     # #                              new=c("Duration","ARI_1","ARI_2","ARI_5","ARI_10","ARI_25","ARI_50","ARI_100","ARI_200","ARI_500","ARI_1000"))})
     # 
@@ -1340,13 +1376,12 @@ server=function(input, output,session) {
 
   ## USGS PFDS
   
-  USGS_PFDS=eventReactive(input$USGS_Precip,{
+  USGS_PFDS=eventReactive(USGS_Precip(),{
     counter=1
-    # store_value=vector(mode="list",length=length(input$USGS_Precip%in%lat_key)) # From when lat/lon was hard coded in and wasn't automatically retrieved
-    store_value=vector(mode="list",length=length(input$USGS_Precip))
+    store_value=vector(mode="list",length=length(USGS_Precip()))
     
     # Loop through each USGS station
-    for(site in input$USGS_Precip){
+    for(site in USGS_Precip()){
       
         lat=readNWISsite(site)$dec_lat_va # Retrieve decimal latitude
         lon=readNWISsite(site)$dec_long_va # Retrieve decimal longitude
@@ -1454,12 +1489,12 @@ server=function(input, output,session) {
         store_value=subset(store_value,select=c("P_Inc_in","dt_min","intensity_inhr","ARI","index_min"))
   
         # Add station and location
-        store_value$site_no=as.character(input$user.faaid)
+        store_value$site_no=as.character(user.faaid())
         
-        if(input$user.faaid %in% names(precip_site_key)){
-          store_value$Location=as.character(unlist(precip_site_key[input$user.faaid],use.names=F))
+        if(user.faaid() %in% names(precip_site_key)){
+          store_value$Location=as.character(unlist(precip_site_key[user.faaid()],use.names=F))
         } else{
-          store_value$Location=as.character(input$user.faaid)
+          store_value$Location=as.character(user.faaid())
         }
   
         # Remove rows with ARI=NA
@@ -1468,7 +1503,7 @@ server=function(input, output,session) {
         # Add Start date/time
         store_value$Start=with(NOAA(),Char_Date[store_value$index_min])
         
-        incProgress(1/(length(unlist(input$USGS_Precip)))) #Update Progress Bar
+        incProgress(1/(length(unlist(USGS_Precip())))) #Update Progress Bar
         store_value
       })
     }
@@ -1486,10 +1521,10 @@ server=function(input, output,session) {
         counter=1
         
         # Loop through each USGS station
-        for(site in input$USGS_Precip){
+        for(site in USGS_Precip()){
             
             # If there is no data for each site; if ==3 then there is only one row of data that is all NA's; if a site had data then there would be more than 1 row, but can't use nrow because R doesn't like it when columns are all NA values
-            if((length(unlist(USGS_precip()))-3)/length(input$USGS_Precip)==3){
+            if((length(unlist(USGS_precip()))-3)/length(USGS_Precip())==3){
               store_value=data.table(P_Inc_in=as.numeric(NA),dt_min=as.numeric(NA),intensity_inhr=as.numeric(NA),ARI=as.numeric(NA),Start=as.character(NA))
             }
             
@@ -1598,7 +1633,7 @@ server=function(input, output,session) {
           }
           else{out_value=full_join(x=out_value,y=store_value)} # combine data from each USGS station into one datatable
           
-          incProgress(1/(length(unlist(input$USGS_Precip)))) #Update Progress Bar
+          incProgress(1/(length(unlist(USGS_Precip())))) #Update Progress Bar
           counter=counter+1
         }
         out_value
@@ -1649,26 +1684,20 @@ server=function(input, output,session) {
   
   # Calculate Flow Summary
   Q_summary=reactive({
-    location=vector(mode="character",length=length(input$USGS_Site))
-    site_name=vector(mode="character",length=length(input$USGS_Site))
-    max_Q=vector(mode="numeric",length=length(input$USGS_Site))
-    total_DRO=vector(mode="numeric",length=length(input$USGS_Site))
-    DRODepth=vector(mode="numeric",length=length(input$USGS_Site))
+    location=vector(mode="character",length=length(USGS_Site()))
+    site_name=vector(mode="character",length=length(USGS_Site()))
+    max_Q=vector(mode="numeric",length=length(USGS_Site()))
+    total_DRO=vector(mode="numeric",length=length(USGS_Site()))
+    DRODepth=vector(mode="numeric",length=length(USGS_Site()))
     counter=1
-    for(site in input$USGS_Site){
+    for(site in USGS_Site()){
       col_name=paste(site,"Flow_Inst",sep="_")
       
       # If flow data exists for site
       if(all(is.na(combine_table()[col_name]))==F){
         max_Q[counter]=max(combine_table()[,paste(site,"Flow_Inst",sep="_")],na.rm=TRUE) # Calculate Maximum Flow Rate
         total_DRO[counter]=sum(combine_table()[,paste(site,"DRO_Vol_cf",sep="_")],na.rm=TRUE) # Calculate Direct Runoff Volume in cubic feet -- my volume is a little different than Marcus b/c I'm doing from 0:00 Date 1 - 0:00 Date 2 to match the NOAA date/time range and he's doing to 24:00 Date 2
-
-        if(site %in% names(watershed_area_key)){
-          DRODepth[counter]=((total_DRO[counter]/(as.numeric(unlist(watershed_area_key2[input$WS_Area_ac[counter]],use.names = FALSE))*43560)) * 12) # Calculate Direct Runoff Depth in inches <-- if USGS site is in keys
-        }
-        else{
-          DRODepth[counter]=((total_DRO[counter]/(as.numeric(input$WS_Area_ac[counter])*43560)) * 12) # Calculate Direct Runoff Depth in inches <-- if user inputs a USGS site not in the keys
-        }
+        DRODepth[counter]=((total_DRO[counter]/(as.numeric(areas()[which(areas()$site_no==site),"drain_area_va"])))*12) # Calculate Direct Runoff Depth in inches
       }
       # If flow data doesn't exist for site
       else{
@@ -1693,13 +1722,13 @@ server=function(input, output,session) {
   
   # Calculate USGS Precipitation Summary
   P_summary=reactive({
-    location=vector(mode="character",length=length(input$USGS_Precip))
-    site_name=vector(mode="character",length=length(input$USGS_Precip))
-    depth=vector(mode="numeric",length=length(input$USGS_Precip))
-    i=vector(mode="numeric",length=length(input$USGS_Precip))
+    location=vector(mode="character",length=length(USGS_Precip()))
+    site_name=vector(mode="character",length=length(USGS_Precip()))
+    depth=vector(mode="numeric",length=length(USGS_Precip()))
+    i=vector(mode="numeric",length=length(USGS_Precip()))
 
     counter=1
-    for(site in input$USGS_Precip){
+    for(site in USGS_Precip()){
       depth[counter]=sum(combine_table()[,paste(site,"Precip_Inst",sep="_")],na.rm=TRUE) # Calculate Total Precipitation Depth
       i[counter]=max(combine_table()[,paste(site,"i_inhr",sep="_")],na.rm=TRUE)   # Calculate Maximum Intensity
       site_name[counter]=site
@@ -1718,13 +1747,13 @@ server=function(input, output,session) {
   
   # Calculate NOAA Precipitation Summary
   NOAA_P_summary=reactive({
-    if (input$user.faaid %in% names(precip_site_key)){
-      location=unlist(precip_site_key[input$user.faaid],use.names=F)
+    if (user.faaid() %in% names(precip_site_key)){
+      location=unlist(precip_site_key[user.faaid()],use.names=F)
     }
-    else{location=input$user.faaid}
-    site_name=input$user.faaid
-    depth=sum(as.numeric(combine_table()[,paste(input$user.faaid,"Precip_Inst",sep="_")]),na.rm=TRUE) # Calculate Total Precipitation Depth
-    i=max(NOAA()[,paste(input$user.faaid,"i_inhr",sep="_"),with=FALSE],na.rm=TRUE)
+    else{location=user.faaid()}
+    site_name=user.faaid()
+    depth=sum(as.numeric(combine_table()[,paste(user.faaid(),"Precip_Inst",sep="_")]),na.rm=TRUE) # Calculate Total Precipitation Depth
+    i=max(NOAA()[,paste(user.faaid(),"i_inhr",sep="_"),with=FALSE],na.rm=TRUE)
     data.table(Location=as.character(location),Station=as.character(site_name),Total_P_in=as.numeric(depth),Max_i_inhr=as.numeric(i))
   })
   
@@ -1740,11 +1769,11 @@ server=function(input, output,session) {
   rv_table=reactive({
     
     # Get data for just streamflow gauges & subset to get DRO Depth (in)
-    streamdata=summary_table()[summary_table()$Station %in% input$USGS_Site,]
+    streamdata=summary_table()[summary_table()$Station %in% USGS_Site(),]
     streamdata=SubsetCols(streamdata,c("Location","Station","Total DRO Depth (in)"),allow.absent.cols=TRUE)
     
     # Get lists of each precipitation station and total precipitation depth
-    precip_data=summary_table()[summary_table()$Station %in% c(input$user.faaid,input$USGS_Precip),]
+    precip_data=summary_table()[summary_table()$Station %in% c(user.faaid(),USGS_Precip()),]
     precip_data=SubsetCols(precip_data,c("Station","Total Precipitation (in)"), allow.absent.cols = FALSE)
 
     for(station in precip_data$Station){
@@ -1753,14 +1782,14 @@ server=function(input, output,session) {
     }
 
     # Subset Columns to Just display Rv and rename columns based on station locations
-    outdata=SubsetCols(streamdata,c("Location",input$USGS_Precip,input$user.faaid),allow.absent.cols=TRUE)
-    if(input$user.faaid %in% names(precip_site_key)){
-      Setnames(outdata, c("Location",input$USGS_Precip[which(input$USGS_Precip%in%names(precip_site_key))],input$user.faaid), c("Stream Gauge",unlist(precip_site_key[input$USGS_Precip],use.names=F),unlist(precip_site_key[input$user.faaid],use.names=F)),allow.absent.cols=T)  #<-- rename if user uses NOAA site that is in key
+    outdata=SubsetCols(streamdata,c("Location",USGS_Precip(),user.faaid()),allow.absent.cols=TRUE)
+    if(user.faaid() %in% names(precip_site_key)){
+      Setnames(outdata, c("Location",USGS_Precip()[which(USGS_Precip()%in%names(precip_site_key))],user.faaid()), c("Stream Gauge",unlist(precip_site_key[USGS_Precip()],use.names=F),unlist(precip_site_key[user.faaid()],use.names=F)),allow.absent.cols=T)  #<-- rename if user uses NOAA site that is in key
     }
     else{
-      Setnames(outdata, c("Location",input$USGS_Precip[which(input$USGS_Precip%in%names(precip_site_key))]), c("Stream Gauge",unlist(precip_site_key[input$USGS_Precip],use.names=F)),allow.absent.cols=T) # <-- rename if user uses NOAA site that isn't in key
+      Setnames(outdata, c("Location",USGS_Precip()[which(USGS_Precip()%in%names(precip_site_key))]), c("Stream Gauge",unlist(precip_site_key[USGS_Precip()],use.names=F)),allow.absent.cols=T) # <-- rename if user uses NOAA site that isn't in key
     }
-    
+  
     outdata
   })
 
@@ -1769,9 +1798,9 @@ server=function(input, output,session) {
     counter=1
     
     # Reformat Flow and Water Quality Data
-    for(site in input$USGS_Site){
+    for(site in USGS_Site()){
       station=gsub("_.*$","",site) #Extract station name from column names
-      data_col=c(paste(site,"baseflow_cfs",sep="_"),paste(site,unlist(combine_key[input$parameterCd],use.names=F),sep="_"))
+      data_col=c(paste(site,"baseflow_cfs",sep="_"),paste(site,unlist(combine_key[parameterCd()],use.names=F),sep="_"))
       data=SubsetCols(combine_table(),c("Char_Date",data_col),allow.absent.cols=TRUE)
       data$site_no=as.character(station)
 
@@ -1782,7 +1811,7 @@ server=function(input, output,session) {
       }
       
       # Remove Site number from columns so data from multiple sites can be joined into one column
-      newnames=c("baseflow_cfs",unlist(combine_key[input$parameterCd],use.names=F))
+      newnames=c("baseflow_cfs",unlist(combine_key[parameterCd()],use.names=F))
       data=Setnames(data, data_col,newnames,allow.absent.cols=T)
       
       if (counter==1){store_value=data}
@@ -1818,100 +1847,49 @@ server=function(input, output,session) {
     store_value
   })
   
-  ### Google Authentification to access Storm Sewer Data ______________________________________________________________________________________
-  
-  # Create reactive variable to store whether or not authentification has occured
-  rv <- reactiveValues(
-    login = FALSE
-  )
-  
-  # Authentication
-  accessToken <- callModule(googleAuth, "gauth_login",
-                            login_class = "btn btn-primary",
-                            logout_class = "btn btn-primary")
-  userDetails <- reactive({
-    validate(
-      need(accessToken(), "User: Not Logged In") # This won't display if errors are hidden in Shiny
-    )
-    rv$login <- TRUE
-    with_shiny(get_user_info, shiny_access_token = accessToken())
-  })
-  
+  ### Download HOBO Storm Sewer Data ______________________________________________________________________________________
+
   # Download Data
   HOBO_data=reactive({
-    validate(
-      need(!is.null(accessToken()),
-           message =
-             paste("Click 'Login via Google' to redirect to a Google page where", # This won't display if errors are hidden in Shiny
-                   "you will authenticate yourself and authorize",
-                   "this app to access your Google Sheets and Google Drive."))
-    )
-    
-    # Spreadsheet ID's for each HOBO sensor
-    HOBO_sheets=c("removed_Google_Sheet_ID",  # Add Google Sheet IDs here for Google Sheets containing storm sewer data
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID",
-                  "removed_Google_Sheet_ID"
-    )
-    
-    
-    # Loop through and retrieve HOBO data for each sensor
-    counter=1
-    for(sheet in HOBO_sheets){
+    withProgress(message="Retrieving Storm Sewer Data",value=0,{
+      # Loop through and retrieve HOBO data for each sensor
+      counter=1
+      for(sheet in HOBO_sheets){
+        
+        drivesheet_value=read_sheet(sheet,na="NA")
+        
+        sensor=paste("ROA",counter,sep="")
+        drivesheet_value$Sensor=sensor
 
-      # Download Data from Sheet
-      drivesheet_value=with_shiny(f=getvalues,shiny_access_token = accessToken(),
-                                  spreadsheetId=sheet,
-                                  ranges="B2:G", # Get all values from google sheet without headers
-                                  majorDimension="ROWS" #ROWS or COLUMNS
-      )
-
-      # Convert from JSON list to dataframe
-      drivesheet_value=unlist(drivesheet_value[2])
-      drivesheet_value=drivesheet_value[-c(1,2)]
-      drivesheet_value=data.frame(matrix(drivesheet_value,ncol=6),stringsAsFactors = FALSE)
-
-      # Rename Columns
-      setnames(drivesheet_value,old=c("X1","X2","X3","X4","X5","X6"),new=c("Sensor_Stage_ft","Sensor_Stage_in","DateTime","DateNumeric","d_rel","Q_rel"))
-
-      sensor=paste("ROA",counter,sep="")
-      drivesheet_value$Sensor=sensor
-
-      # Convert string "NA" values to NA and remove
-      drivesheet_value[drivesheet_value=="NA"]=NA
-      drivesheet_value=drivesheet_value[complete.cases(drivesheet_value[,c("Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel")]),]
-
-      # Specify Value Types
-      drivesheet_value$Sensor_Stage_ft=as.numeric(drivesheet_value$Sensor_Stage_ft)
-      drivesheet_value$Sensor_Stage_in=as.numeric(drivesheet_value$Sensor_Stage_in)
-      drivesheet_value$DateNumeric=as.numeric(drivesheet_value$DateNumeric)
-      drivesheet_value$d_rel=as.numeric(drivesheet_value$d_rel)
-      drivesheet_value$Q_rel=as.numeric(drivesheet_value$Q_rel)
-      drivesheet_value$DateTime=ymd_hms(drivesheet_value$DateTime,tz="America/New_York")
-      drivesheet_value$Char_Date=as.character(drivesheet_value$DateTime)
-
-      #Subset/Reorder Columns
-      drivesheet_value=drivesheet_value[,c("Char_Date","DateTime","Sensor","Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel")]
-
-      if(counter==1){store_value=drivesheet_value}
-      else{store_value=full_join(x=store_value,y=drivesheet_value)}
-      counter=counter+1
-    }
+        # Specify Value Types
+        drivesheet_value$Sensor_Stage_ft=as.numeric(drivesheet_value$Sensor_Stage_ft)
+        drivesheet_value$Sensor_Stage_in=as.numeric(drivesheet_value$Sensor_Stage_in)
+        drivesheet_value$DateNumeric=as.numeric(drivesheet_value$DateNumeric)
+        drivesheet_value$d_rel=as.numeric(drivesheet_value$d_rel)
+        drivesheet_value$Q_rel=as.numeric(drivesheet_value$Q_rel)
+        drivesheet_value$DateTime=ymd_hms(drivesheet_value$DateTime,tz="America/New_York")
+        drivesheet_value$Char_Date=as.character(drivesheet_value$DateTime)
+        
+        #Subset/Reorder Columns
+        drivesheet_value=drivesheet_value[,c("Char_Date","DateTime","Sensor","Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel")]
+        
+        if(counter==1){store_value=drivesheet_value}
+        else{store_value=full_join(x=store_value,y=drivesheet_value)}
+        counter=counter+1
+        incProgress(1/length(HOBO_sheets))
+      }
+    })
     store_value
   })
   
   # Create Table of HOBO Data to view/export
   HOBO_data_out=reactive({
-    data=subset(HOBO_data(),select=c("Char_Date","Sensor","Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel"),(Sensor %in% input$HOBO_sensor)&(DateTime>=ymd(toString(input$PrecipDate[1]),tz="America/New_York"))&(DateTime<ymd(toString(input$PrecipDate[2]+1),tz="America/New_York")))
+    data=subset(HOBO_data(),select=c("Char_Date","Sensor","Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel"),(Sensor %in% HOBO_sensor())&(DateTime>=ymd(toString(date_start()),tz="America/New_York"))&(DateTime<ymd(toString(date_end()+1),tz="America/New_York")))
     Setnames(data,old=c("Char_Date","Sensor","Sensor_Stage_ft","Sensor_Stage_in","d_rel","Q_rel"),new=c("Date/Time","Sensor","Sensor Stage (ft)","Sensor Stage (in)","Relative Depth","Relative Discharge"))
     data
   })
 
-  ### Download Current Conditions & 10-day forecast from Wunderground
+  ### Current Weather Conditons & 7-Day Forecast
 
   # Function to GeoCode using Google API
   getGeoData <- function(location, api_key){
@@ -1922,21 +1900,83 @@ server=function(input, output,session) {
   }
   
   # Geocode Text Input to get Location
-  location=reactive(getGeoData(input$Location,"AIzaSyDB9cW2leUiuNk2rn3PVArvy4bK_jJYLQ8"))
+  location=reactive(getGeoData(input$Location,geocode_key))
   LatLong=reactive(location()$geometry$location) # Get Lat/Long
   Address=reactive(unlist(strsplit(location()$formatted_address,","))) # Get Address
   
-  # Retrieve 10-Day Forecast
+  # Retrieve 7-Day Forecast from Dark Sky
   forecast=reactive({
-    set_api_key("removed_API_Key") # Add API key created for Wunderground Developer Account
-    forecast=forecast10day(location=set_location(lat_long=paste(LatLong()[1],LatLong()[2],sep=",")),key=get_api_key())
+    # Function to retrieve forecast
+    dark_sky_get_current_forecast=function (key,latitude, longitude, units = "us", language = "en", 
+                                            exclude = NULL, extend = NULL, add_json = FALSE, add_headers = FALSE, 
+                                            ...) 
+    {
+      url <- sprintf("https://api.darksky.net/forecast/%s/%s,%s", 
+                     key, latitude, longitude)
+      params <- list(units = units, language = language)
+      if (!is.null(exclude)) 
+        params$exclude <- exclude
+      if (!is.null(extend)) 
+        params$extend <- extend
+      resp <- httr::GET(url = url, query = params, ...)
+      httr::stop_for_status(resp)
+      tmp <- httr::content(resp, as = "parsed")
+      lys <- c("hourly", "minutely", "daily")
+      fio_data <- lapply(lys[which(lys %in% names(tmp))], function(x) {
+        dat <- plyr::rbind.fill(lapply(tmp[[x]]$data, as.data.frame, 
+                                       stringsAsFactors = FALSE))
+        ftimes <- c("time", "sunriseTime", "sunsetTime", "temperatureMinTime", 
+                    "temperatureMaxTime", "apparentTemperatureMinTime", 
+                    "apparentTemperatureMaxTime", "precipIntensityMaxTime")
+        cols <- ftimes[which(ftimes %in% colnames(dat))]
+        for (col in cols) {
+          dat[, col] <- as_datetime(dat[, col])
+        }
+        dat
+      })
+      fio_data <- setNames(fio_data, lys[which(lys %in% names(tmp))])
+      if ("currently" %in% names(tmp)) {
+        currently <- as.data.frame(tmp$currently, stringsAsFactors = FALSE)
+        if ("time" %in% colnames(currently)) {
+          currently$time <- as_datetime(currently$time)
+        }
+        fio_data$currently <- currently
+      }
+      if (add_json) 
+        fio_data$json <- tmp
+      ret_val <- fio_data
+      if (add_headers) {
+        dev_heads <- c("cache-control", "expires", "x-forecast-api-calls", 
+                       "x-response-time")
+        ret_heads <- httr::headers(resp)
+        ret_val <- c(fio_data, ret_heads[dev_heads[which(dev_heads %in% 
+                                                           names(ret_heads))]])
+      }
+      class(ret_val) <- c("darksky", "current", class(ret_val))
+      return(ret_val)
+    }
     
-    forecast$day=weekdays(forecast$date)
-    forecast$date=format(as.Date(forecast$date),"%m/%d")
+    # Get Forecast
+    forecast=dark_sky_get_current_forecast(darksky_key,LatLong()[1],LatLong()[2])
     
-    forecast=subset(forecast,select=c("day","date","temp_high","temp_low","cond","p_precip","rain_allday"))
-    setnames(forecast,old=c("day","date","temp_high","temp_low","cond","p_precip","rain_allday"),new=c("Day","Date","High Temp.","Low Temp.","Condition","Precip. Probability (%)","Precip. Depth (in)"))
-    forecast
+    Date=format(date(forecast$daily$time),format="%m/%d")
+    Day=weekdays(forecast$daily$time)
+    High=round(forecast$daily$temperatureHigh,0)
+    Low=round(forecast$daily$temperatureLow,0)
+    Condition=forecast$daily$summary
+    Snow=forecast$daily$precipAccumulation # Dark Sky Forecasted Snow Total
+    
+    # If no snow is forecasted, then set to NA
+    if(is.null(Snow)){
+      Snow=as.numeric(rep.int(NA,8))
+    }
+    Rain=forecast$daily$precipIntensity*24 # Calculate Precip. Total by Multiplying average daily precip intensity by 24 hours <- this is what Dark Sky does on their website: 'PrecipIntensity: The average expected intensity of precipitation in inches of liquid water per hour.'
+    Precip=round(ifelse(!is.na(Snow),Snow,Rain),2)  # If snow, then report Dark Sky snow total. Otherwise, report calculated rain total
+    Type=tools::toTitleCase(forecast$daily$precipType)
+    Precip_Prob=forecast$daily$precipProbability*100
+
+    forecast_table=data.frame(Day,Date,High,Low,Condition,Precip_Prob,Precip,Type)
+    forecast_table=setnames(forecast_table,old=c("High","Low","Precip_Prob","Precip","Type"),new=c("High Temp.","Low Temp.","Precip. Probability (%)","Precip. Depth (in)","Precip. Type"))
   })
   
   # Create HTML for Weather Sticker
@@ -1951,25 +1991,25 @@ server=function(input, output,session) {
     data=subset(summary_table(),select=c("Location","Station","Maximum Discharge (cfs)","Total Precipitation (in)","Maximum Intensity (in/hr)"))
     
     # Add Latitude/Longitude for NOAA Precip Station
-    data[which(data$Station==input$user.faaid),"Latitude"]=iadata()$lat[1]
-    data[which(data$Station==input$user.faaid),"Longitude"]=iadata()$lon[1]
+    data[which(data$Station==user.faaid()),"Latitude"]=noaa_latlon$lat[1]
+    data[which(data$Station==user.faaid()),"Longitude"]=noaa_latlon$lon[1]
     
     # Create Label for NOAA Precip Station
-    data[which(data$Station==input$user.faaid),"Label"]=paste(
+    data[which(data$Station==user.faaid()),"Label"]=paste(
       sep="<br/>",
-      paste("<b>",data[which(data$Station==input$user.faaid),"Location"],"</b>",sep=""),
-      paste("FAA ID: ",data[which(data$Station==input$user.faaid),"Station"],sep=""),
-      paste("Total Precipitation (in): ",data[which(data$Station==input$user.faaid),"Total Precipitation (in)"],sep=""),
-      paste("Maximum Intensity (in/hr): ",data[which(data$Station==input$user.faaid),"Maximum Intensity (in/hr)"],sep="")
+      paste("<b>",data[which(data$Station==user.faaid()),"Location"],"</b>",sep=""),
+      paste("FAA ID: ",data[which(data$Station==user.faaid()),"Station"],sep=""),
+      paste("Total Precipitation (in): ",data[which(data$Station==user.faaid()),"Total Precipitation (in)"],sep=""),
+      paste("Maximum Intensity (in/hr): ",data[which(data$Station==user.faaid()),"Maximum Intensity (in/hr)"],sep="")
     )
     
     # Set Marker Attributes for NOAA Precip Station
-    data[which(data$Station==input$user.faaid),"Marker_Color"]="darkblue"
-    data[which(data$Station==input$user.faaid),"Icon"]="tint"
-    data[which(data$Station==input$user.faaid),"Icon_Color"]="#ffffff"
+    data[which(data$Station==user.faaid()),"Marker_Color"]="darkblue"
+    data[which(data$Station==user.faaid()),"Icon"]="tint"
+    data[which(data$Station==user.faaid()),"Icon_Color"]="#ffffff"
     
     # Add Latitude/Longitude for USGS Precip Stations & Set Icon Attributes
-    for(site in input$USGS_Precip){
+    for(site in USGS_Precip()){
       data[which(data$Station==site),"Latitude"]=readNWISsite(site)$dec_lat_va
       data[which(data$Station==site),"Longitude"]=readNWISsite(site)$dec_long_va
       
@@ -1994,7 +2034,7 @@ server=function(input, output,session) {
     }
     
     # Add Latitude/Longitude for USGS Stream Stations
-    for(site in input$USGS_Site){
+    for(site in USGS_Site()){
       data[which(data$Station==site),"Latitude"]=readNWISsite(site)$dec_lat_va
       data[which(data$Station==site),"Longitude"]=readNWISsite(site)$dec_long_va
       
@@ -2093,7 +2133,7 @@ server=function(input, output,session) {
     
     # Get Sensor Names & Maximum Relative Flow Depths for Selected Sensors
     counter=1
-    for(sensor in input$HOBO_sensor){
+    for(sensor in HOBO_sensor()){
       # Get Name
       data[counter,"Sensor"]=sensor
       
@@ -2102,7 +2142,12 @@ server=function(input, output,session) {
         data[counter,"max_d_rel"]=NA
       }
       else{ # relative flow data exists
-        data[counter,"max_d_rel"]=round(max(HOBO_data_out()[which(HOBO_data_out()$Sensor==sensor),"Relative Depth"]),2)
+        if(sensor%in%unique(HOBO_data_out()$Sensor)){ # Data for sensor exists
+          data[counter,"max_d_rel"]=round(max(HOBO_data_out()[which(HOBO_data_out()$Sensor==sensor),"Relative Depth"]),2)
+        }
+        else{
+          data[counter,"max_d_rel"]=NA
+        }
       }
       counter=counter+1
     }
@@ -2132,8 +2177,11 @@ server=function(input, output,session) {
     data[which(data$Sensor=="ROA8"),"Latitude"]=37.27212806650
     data[which(data$Sensor=="ROA8"),"Longitude"]=-79.93536153150
     
+    data[which(data$Sensor=="ROA9"),"Latitude"]=37.2722628640291
+    data[which(data$Sensor=="ROA9"),"Longitude"]=-79.9458076786516
+    
     # Create Labels
-    for(sensor in input$HOBO_sensor){
+    for(sensor in HOBO_sensor()){
       data[which(data$Sensor==sensor),"Label"]=paste(
         sep="<br/>",
         paste("<b>",sensor,"</b>",sep=""),
@@ -2174,10 +2222,10 @@ server=function(input, output,session) {
   ## Lick Run
   flood_lick_run=reactive({
     # Station Parameters
-    station="Lick Run" 
-    station_id="0205551460" 
-    stages=c(8,9,10) # Minor Alert, Moderate Alert, and Major Stages
-    
+    station="Lick Run"
+    station_id="0205551460"
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+
     # Create data frame to store Gauge Height Data
     data=data.frame(matrix(ncol=3))
     colnames(data)=c("Station","Date/Time","Gauge Height")
@@ -2189,15 +2237,16 @@ server=function(input, output,session) {
     plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
 
     # Change Color of Bar depending on gauge height
-    if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
-      plot=plot+geom_bar(stat="identity",fill="#60e519")
-    } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
-      plot=plot+geom_bar(stat="identity",fill="#fcec0a")
-    } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
-      plot=plot+geom_bar(stat="identity",fill="#A80000")
-    } else{
-      plot=plot+geom_bar(stat="identity",fill="#303030")
-    }
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
 
     plot=plot+
       scale_y_continuous(limits=c(0,max(20,data[1,"Gauge Height"])+5))+ #Delete this line whenever I specify stages
@@ -2219,12 +2268,15 @@ server=function(input, output,session) {
     plot
   })
   
-  ## Tinker Creek
+  ## Tinker Creek near Daleville
   flood_tinker=reactive({
+    
     # Station Parameters
-    station="Tinker Creek"
+    station="Tinker Creek near Daleville"
     station_id="02055100"
     stages=c(11,13,15) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
     
     # Create data frame to store Gauge Height Data
     data=data.frame(matrix(ncol=3))
@@ -2273,6 +2325,8 @@ server=function(input, output,session) {
     station_id="02055000"
     stages=c(10,12,16) # Minor Alert, Moderate Alert, and Major Stages
     
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
     # Create data frame to store Gauge Height Data
     data=data.frame(matrix(ncol=3))
     colnames(data)=c("Station","Date/Time","Gauge Height")
@@ -2319,6 +2373,8 @@ server=function(input, output,session) {
     station="Roanoke River at Glenvar"
     station_id="02054530"
     stages=c(9,14,16) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
     
     # Create data frame to store Gauge Height Data
     data=data.frame(matrix(ncol=3))
@@ -2367,6 +2423,8 @@ server=function(input, output,session) {
     station_id="02054500"
     stages=c(8,11,13) # Minor Alert, Moderate Alert, and Major Stages
     
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
     # Create data frame to store Gauge Height Data
     data=data.frame(matrix(ncol=3))
     colnames(data)=c("Station","Date/Time","Gauge Height")
@@ -2406,6 +2464,210 @@ server=function(input, output,session) {
             plot.title=element_text(size=16,face='bold',hjust=0.5))
     plot
   })
+  
+  ## Roanoke River at Route 117
+  flood_rr_117=reactive({
+    # Station Parameters
+    station="Roanoke River at Route 117" 
+    station_id="02054750" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=combine_table_out()[which(combine_table_out()[,paste0(station_id,"_Gauge_Height_ft")]==max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)),"Date/Time"][1]
+    data[1,"Gauge Height"]=max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(20,data[1,"Gauge Height"])+5))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(stages[3],data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Maximum Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Roanoke River at 13th Street
+  flood_rr_13=reactive({
+    # Station Parameters
+    station="Roanoke River at 13th St." 
+    station_id="02055080" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=combine_table_out()[which(combine_table_out()[,paste0(station_id,"_Gauge_Height_ft")]==max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)),"Date/Time"][1]
+    data[1,"Gauge Height"]=max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(20,data[1,"Gauge Height"])+5))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(stages[3],data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Maximum Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Tinker Creek at Columbia St.
+  flood_tinker_columbia=reactive({
+    # Station Parameters
+    station="Tinker Creek at Columbia St." 
+    station_id="02055379" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=combine_table_out()[which(combine_table_out()[,paste0(station_id,"_Gauge_Height_ft")]==max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)),"Date/Time"][1]
+    data[1,"Gauge Height"]=max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(20,data[1,"Gauge Height"])+5))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(stages[3],data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Maximum Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Tinker Creek above Glade Creek
+  flood_tinker_glade=reactive({
+    # Station Parameters
+    station="Tinker Creek above Glade Creek" 
+    station_id="0205551614" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    req(paste0(station_id,"_Gauge_Height_ft")%in%colnames(combine_table_out()))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=combine_table_out()[which(combine_table_out()[,paste0(station_id,"_Gauge_Height_ft")]==max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)),"Date/Time"][1]
+    data[1,"Gauge Height"]=max(combine_table_out()[,c("Date/Time",paste0(station_id,"_Gauge_Height_ft"))][,paste0(station_id,"_Gauge_Height_ft")],na.rm=T)
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(20,data[1,"Gauge Height"])+5))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(stages[3],data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Maximum Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
 
   ### Real-Time Flood Stage Graphics
 
@@ -2414,7 +2676,7 @@ server=function(input, output,session) {
     # Station Parameters
     station="Lick Run" 
     station_id="0205551460" 
-    stages=c(8,9,10) # Minor Alert, Moderate Alert, and Major Stages
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
     
     # Retrieve Current Gauge Height Data for Today
     gh_data=renameNWISColumns(readNWISuv(siteNumbers=station_id,parameterCd="00065",startDate=Sys.Date()-1,endDate=Sys.Date(),tz="America/New_York"))
@@ -2430,15 +2692,16 @@ server=function(input, output,session) {
     plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
 
     # Change Color of Bar depending on gauge height
-    if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
-      plot=plot+geom_bar(stat="identity",fill="#60e519")
-    } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
-      plot=plot+geom_bar(stat="identity",fill="#fcec0a")
-    } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
-      plot=plot+geom_bar(stat="identity",fill="#A80000")
-    } else{
-      plot=plot+geom_bar(stat="identity",fill="#303030")
-    }
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
 
     plot=plot+
       scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)))+ #Delete this line whenever I specify stages
@@ -2460,10 +2723,10 @@ server=function(input, output,session) {
     plot
   })
   
-  ## Tinker Creek
+  ## Tinker Creek near Daleville
   gh_tinker=reactive({
     # Station Parameters
-    station="Tinker Creek"
+    station="Tinker Creek near Daleville"
     station_id="02055100"
     stages=c(11,13,15) # Minor Alert, Moderate Alert, and Major Stages
 
@@ -2659,7 +2922,215 @@ server=function(input, output,session) {
             plot.title=element_text(size=16,face='bold',hjust=0.5))
     plot
   })
-
+  
+  ## Roanoke River at Route 117
+  gh_rr_117=reactive({
+    # Station Parameters
+    station="Roanoke River at Route 117" 
+    station_id="02054750" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    # Retrieve Current Gauge Height Data for Today
+    gh_data=renameNWISColumns(readNWISuv(siteNumbers=station_id,parameterCd="00065",startDate=Sys.Date()-1,endDate=Sys.Date(),tz="America/New_York"))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=as.character(gh_data[nrow(gh_data),"dateTime"])
+    data[1,"Gauge Height"]=gh_data[nrow(gh_data),names(select(gh_data,ends_with("GH_Inst")))] 
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Current Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Roanoke River at 13th St.
+  gh_rr_13=reactive({
+    # Station Parameters
+    station="Roanoke River at 13th St." 
+    station_id="02055080" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    # Retrieve Current Gauge Height Data for Today
+    gh_data=renameNWISColumns(readNWISuv(siteNumbers=station_id,parameterCd="00065",startDate=Sys.Date()-1,endDate=Sys.Date(),tz="America/New_York"))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=as.character(gh_data[nrow(gh_data),"dateTime"])
+    data[1,"Gauge Height"]=gh_data[nrow(gh_data),names(select(gh_data,ends_with("GH_Inst")))] 
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Current Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Tinker Creek at Columbia St.
+  gh_tinker_columbia=reactive({
+    # Station Parameters
+    station="Tinker Creek at Columbia St." 
+    station_id="02055379" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    # Retrieve Current Gauge Height Data for Today
+    gh_data=renameNWISColumns(readNWISuv(siteNumbers=station_id,parameterCd="00065",startDate=Sys.Date()-1,endDate=Sys.Date(),tz="America/New_York"))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=as.character(gh_data[nrow(gh_data),"dateTime"])
+    data[1,"Gauge Height"]=gh_data[nrow(gh_data),names(select(gh_data,ends_with("GH_Inst")))] 
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Current Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
+  ## Tinker Creek above Glade Creek
+  gh_tinker_glade=reactive({
+    # Station Parameters
+    station="Tinker Creek above Glade Creek" 
+    station_id="0205551614" 
+    stages=c(30,30,30) # Minor Alert, Moderate Alert, and Major Stages
+    
+    # Retrieve Current Gauge Height Data for Today
+    gh_data=renameNWISColumns(readNWISuv(siteNumbers=station_id,parameterCd="00065",startDate=Sys.Date()-1,endDate=Sys.Date(),tz="America/New_York"))
+    
+    # Create data frame to store Gauge Height Data
+    data=data.frame(matrix(ncol=3))
+    colnames(data)=c("Station","Date/Time","Gauge Height")
+    data[1,"Station"]=station
+    data[1,"Date/Time"]=as.character(gh_data[nrow(gh_data),"dateTime"])
+    data[1,"Gauge Height"]=gh_data[nrow(gh_data),names(select(gh_data,ends_with("GH_Inst")))] 
+    
+    # Create Plot
+    plot=ggplot(data,aes(x=Station,y=`Gauge Height`))
+    
+    # Change Color of Bar depending on gauge height
+    # if(data[which(data[,"Station"]==station),"Gauge Height"]<stages[1]){
+    #   plot=plot+geom_bar(stat="identity",fill="#60e519")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[1]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[2]){
+    #   plot=plot+geom_bar(stat="identity",fill="#fcec0a")
+    # } else if(data[which(data[,"Station"]==station),"Gauge Height"]>=stages[2]&data[which(data[,"Station"]==station),"Gauge Height"]<stages[3]){
+    #   plot=plot+geom_bar(stat="identity",fill="#A80000")
+    # } else{
+    #   plot=plot+geom_bar(stat="identity",fill="#303030")
+    # }
+    plot=plot+geom_bar(stat="identity",fill="#3579e8")
+    
+    plot=plot+
+      scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)))+ #Delete this line whenever I specify stages
+      # scale_y_continuous(limits=c(0,max(c(20,data[1,"Gauge Height"])+5)),sec.axis=sec_axis(~.,breaks=stages,name="Flood Stage",labels=c(paste0("Minor (",stages[1],".0 ft.)"),paste0("Moderate (",stages[2],".0 ft.)"),paste0("Major (",stages[3],".0 ft.)"))))+ # Add Flood Stage Axis
+      # geom_hline(yintercept=stages[1],linetype="dashed",color="yellow",size=2.5)+
+      # geom_hline(yintercept=stages[2],linetype="dashed",color="red",size=2.5)+
+      # geom_hline(yintercept=stages[3],linetype="dashed",color="black",size=2.5)+
+      geom_shadowtext(aes(label=paste(data[1,"Gauge Height"],"ft."),fontface='bold'),vjust=-1.5,size=6,color="black",bg.colour="white")+ # Add Data Label Gauge Height
+      geom_shadowtext(aes(label=paste(data[1,"Date/Time"]),fontface='bold'),vjust=-0.5,size=4,color="black",bg.colour="white")+ # Add Data Label Date/Time
+      xlab(station)+
+      ylab("Current Gauge Height (ft)")+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            axis.text.x=element_blank(),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12),
+            plot.title=element_text(size=16,face='bold',hjust=0.5))
+    plot
+  })
+  
   ### Create Output Variables ###################################################################################################
 
   # Download Handler for User Manual
@@ -2674,6 +3145,7 @@ server=function(input, output,session) {
 
   ## Output Table of Stations if FAAID is blank
   faaidtable_out=reactive({
+    req(is.data.frame(Site()))
     data=Site()
     data=setnames(data,old=c("sname","sid"),new=c("Location","FAA ID"))
     data
@@ -2684,7 +3156,7 @@ server=function(input, output,session) {
   
   
   ## Output NOAA & USGS PFDS Mean
-  output$NOAA_site=renderText({paste("<b> FAA ID Code: ", input$user.faaid,"</b>")})
+  output$NOAA_site=renderText({paste("<b> FAA ID Code: ", user.faaid(),"</b>")})
   output$NOAA_PFDS=DT::renderDataTable(NOAA_PFDS(),rownames=F,options=list(scrollX=T))
   
   output$USGS_PFDS=DT::renderDataTable(USGS_PFDS()[[match(input$counter,options())]],rownames=F,options=list(scrollX=T))
@@ -2692,7 +3164,7 @@ server=function(input, output,session) {
   ## Download NOAA PFDS
   output$NOAA_PFDS_download=downloadHandler(
     filename=function(){
-      paste(input$user.faaid,"_PFDS",".csv",sep="")
+      paste(user.faaid(),"_PFDS",".csv",sep="")
     },
     content=function(file){
       write.csv(NOAA_PFDS(),file,row.names = FALSE)
@@ -2740,7 +3212,7 @@ server=function(input, output,session) {
   # Download Handler for Combine Data Table
   output$combine_download=downloadHandler(
     filename=function(){
-      paste("combined_data_",input$PrecipDate[1],"_",input$PrecipDate[2],".csv",sep="")
+      paste("combined_data_",date_start(),"_",date_end(),".csv",sep="")
     },
     content=function(file){
       write.csv(combine_table_out(),file,row.names = FALSE)
@@ -2750,10 +3222,10 @@ server=function(input, output,session) {
   ## Output Sliding Window Data
   sw_out_formatted=reactive({
     if("ARI (years)"%in%colnames(sw_out())){
-      datatable(sw_out(),options=list(scrollX=T))%>%formatRound(c("ARI (years)", "Precipitation Depth (in)","Precipitation Intensity (in/hr)"),2)
+      datatable(sw_out(),options=list(scrollX=T,language=list(zeroRecords="All ARI < 1 Year")))%>%formatRound(c("ARI (years)", "Precipitation Depth (in)","Precipitation Intensity (in/hr)"),2)
     }
     else{
-      datatable(sw_out(),options=list(scrollX=T))
+      datatable(sw_out(),options=list(scrollX=T,language=list(zeroRecords="All ARI < 1 Year")))
     }
   })
   
@@ -2761,19 +3233,18 @@ server=function(input, output,session) {
   
   output$ari_download=downloadHandler(
     filename=function(){
-      paste("ARI_",input$PrecipDate[1],"_",input$PrecipDate[2],".csv",sep="")
+      paste("ARI_",date_start(),"_",date_end(),".csv",sep="")
     },
     content=function(file){
       write.csv(sw_out(),file,row.names = FALSE)
     }
   )
   
-  ## Output Summary Table
-  output$summary_table=DT::renderDataTable(datatable(summary_table(),rownames=F,options=list(scrollX=T))%>%formatRound(c("Total DRO Volume (cf)"),0)%>%formatRound(c("Total DRO Depth (in)"),3)%>%formatRound(c("Total Precipitation (in)","Maximum Intensity (in/hr)"),2))
-  
-  
+  ## Output Summary Table - only include sites with summary data
+  output$summary_table=DT::renderDataTable(datatable(summary_table()[rowSums(is.na(summary_table()[,c("Maximum Discharge (cfs)","Total DRO Volume (cf)","Total DRO Depth (in)","Total Precipitation (in)","Maximum Intensity (in/hr)"),drop=F]))!=5,],rownames=F,options=list(scrollX=T))%>%formatRound(c("Total DRO Volume (cf)"),0)%>%formatRound(c("Total DRO Depth (in)"),3)%>%formatRound(c("Total Precipitation (in)","Maximum Intensity (in/hr)"),2))
+
   ## Output Runoff Volume Coefficient Summary
-  output$RV=DT::renderDataTable(datatable(rv_table(),rownames=F,options=list(scrollX=T))%>%formatRound(c(unlist(precip_site_key[input$USGS_Precip],use.names=F),unlist(precip_site_key[input$user.faaid],use.names=F),input$USGS_Precip[which(!input$USGS_Precip%in%names(precip_site_key))],input$user.faaid[which(!input$user.faaid%in%names(precip_site_key))]),3))
+  output$RV=DT::renderDataTable(datatable(rv_table(),rownames=F,options=list(scrollX=T,language=list(zeroRecords="No Precipitation")))%>%formatRound(c(unlist(precip_site_key[USGS_Precip()],use.names=F),unlist(precip_site_key[user.faaid()],use.names=F),USGS_Precip()[which(!USGS_Precip()%in%names(precip_site_key))],user.faaid()[which(!user.faaid()%in%names(precip_site_key))]),3))
   
   ## Output Hyetograph & Hydrograph
   
@@ -2795,7 +3266,7 @@ server=function(input, output,session) {
       if(input$user.wq=="None"){
         
         # Get data
-        data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))
+        data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))
         
         # Generate Color Values
         adj_names=(paste("0bserved ",input$user.gauge," Precipitation",sep=""))
@@ -2825,10 +3296,10 @@ server=function(input, output,session) {
           wq=plot_table()[,c("dateTime","site_no","Location",toString(unlist(plot_key[input$user.wq],use.names=F)))]
           
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
+          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
           
           # Plot Colors by Station/Dataset
             values = gg_color_hue(length(adj_names))
@@ -2836,12 +3307,12 @@ server=function(input, output,session) {
             values[[paste("0bserved ",input$user.gauge," Precipitation",sep="")]]="blue" # Specify that precip depth is blue to match hyetograph
 
           # Create list of linetypes to format legend
-            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location))))
+            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location))))
             style=c(style,'solid') # add line type for precipitation
 
           plot=ggplot(data,aes(x=dateTime))+
             geom_line(aes(x=as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC")[1]-1,y=0,color=paste("0bserved ",input$user.gauge," Precipitation",sep="")))+ # Add line for Precipitation
-            geom_point(data=subset(wq,site_no %in% input$USGS_Site),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
+            geom_point(data=subset(wq,site_no %in% USGS_Site()),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
             scale_x_datetime(limits=c(sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"))[1],sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"),decreasing=TRUE)[1]))+
             xlab("Date/Time")+
             ylab(paste(toString(wqkey[unlist(plot_key[input$user.wq],use.names=F)]),"\n \n",sep=" "))+
@@ -2859,7 +3330,7 @@ server=function(input, output,session) {
         # Else if user selects to plot water quality data and water quality data doesn't exist for any site
         else{
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))
 
           # Generate Color Values
           adj_names=paste("0bserved ",input$user.gauge," Precipitation",sep="")
@@ -2891,10 +3362,10 @@ server=function(input, output,session) {
       if(input$user.wq=="None"){
         
         # Get data
-        data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))
+        data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))
         
         # Generate Color Values
-        adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow')),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
+        adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow')),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
         
         # Plot Colors by Station
         if(input$plot_color==0){
@@ -2913,7 +3384,7 @@ server=function(input, output,session) {
         
         # Create list of linetypes to format legend
         style=c('solid')
-        for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+        for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
           style=c(style,'3313','solid')
         }
         
@@ -2940,10 +3411,10 @@ server=function(input, output,session) {
           wq[,toString(unlist(plot_key[input$user.wq],use.names=F))]=wq[,toString(unlist(plot_key[input$user.wq],use.names=F))]*(max(plot_table()$Flow_Inst,na.rm=TRUE)/(max(plot_table()[,c(toString(unlist(plot_key[input$user.wq],use.names=F)))],na.rm=TRUE)))
           
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),'Baseflow'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
+          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),'Baseflow'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
           
           # Plot Colors by Station
           if(input$plot_color==0){
@@ -2961,8 +3432,8 @@ server=function(input, output,session) {
           
           # Create list of linetypes to format legend
           # Add linetypes for water quality for station that has no flow data; if statement checks for number of sites that don't have flow data
-          if(length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))!=0){
-            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))))
+          if(length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))!=0){
+            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))))
             style=c(style,'solid') # add line type for precipitation
           }
           else{
@@ -2970,7 +3441,7 @@ server=function(input, output,session) {
           }
           
           # Add linetypes for baseflow and water quality for station that has flow data
-          for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+          for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
             style=c(style,'3313','solid','1F')
           }
           
@@ -2978,7 +3449,7 @@ server=function(input, output,session) {
             geom_line(aes(y=Flow_Inst,color=paste(Location,"Discharge")),size=1)+
             geom_line(aes(y=baseflow_cfs,color=paste(Location, 'Baseflow')),size=1,linetype="3313")+
             geom_line(aes(x=as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC")[1]-1,y=0,color=paste("0bserved ",input$user.gauge," Precipitation",sep="")))+ # Add line for Precipitation
-            geom_point(data=subset(wq,site_no %in% input$USGS_Site),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
+            geom_point(data=subset(wq,site_no %in% USGS_Site()),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
             scale_x_datetime(limits=c(sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"))[1],sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"),decreasing=TRUE)[1]))+
             scale_y_continuous(sec.axis=sec_axis(~.*(max(plot_table()[,c(toString(unlist(plot_key[input$user.wq],use.names=F)))],na.rm=TRUE)/max(plot_table()$Flow_Inst,na.rm=TRUE)),name=toString(wqkey[unlist(plot_key[input$user.wq],use.names=F)])))+
             xlab("Date/Time")+
@@ -2997,10 +3468,10 @@ server=function(input, output,session) {
         # Else if user selects to plot water quality data and water quality data doesn't exist for any site
         else{
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow')),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
+          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow')),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
           
           # Plot Colors by Station
           if(input$plot_color==0){
@@ -3018,7 +3489,7 @@ server=function(input, output,session) {
           
           # Create list of linetypes to format legend
           style=c('solid')
-          for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+          for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
             style=c(style,'3313','solid')
           }
           
@@ -3066,12 +3537,13 @@ server=function(input, output,session) {
   
   ## Interactive Hydrograph; Duplicate Hydrograph but without labels for Precipitation Depth
   hydro_int=reactive({
+    req(input$user.wq)
     # Plot if flow data doesn't exist; flow data not downloaded or flow data all NA
     if(length(grep(x=colnames(plot_table()),pattern="Flow_Inst"))==0|all(is.na(plot_table()[grep(x=colnames(plot_table()),pattern="Flow_Inst")]))==T){
       if(input$user.wq=="None"){
         
         # Get data
-        data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))
+        data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))
         
         # Generate Color Values
         adj_names=(paste("0bserved ",input$user.gauge," Precipitation",sep=""))
@@ -3101,10 +3573,10 @@ server=function(input, output,session) {
           wq=plot_table()[,c("dateTime","site_no","Location",toString(unlist(plot_key[input$user.wq],use.names=F)))]
           
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F)))
+          adj_names=sort(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F)))
           
           # Plot Colors by Station/Dataset
           values = gg_color_hue(length(adj_names))
@@ -3112,7 +3584,7 @@ server=function(input, output,session) {
 
           plot=ggplot(data,aes(x=dateTime))+
             geom_line(aes(x=as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC")[1]-1,y=0))+ # Add line for Precipitation
-            geom_point(data=subset(wq,site_no %in% input$USGS_Site),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
+            geom_point(data=subset(wq,site_no %in% USGS_Site()),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
             scale_x_datetime(limits=c(sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"))[1],sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"),decreasing=TRUE)[1]))+
             xlab("Date/Time")+
             ylab(paste(toString(wqkey[unlist(plot_key[input$user.wq],use.names=F)]),"\n \n",sep=" "))+
@@ -3130,7 +3602,7 @@ server=function(input, output,session) {
         # Else if user selects to plot water quality data and water quality data doesn't exist for any site
         else{
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))
           
           # Generate Color Values
           adj_names=paste("0bserved ",input$user.gauge," Precipitation",sep="")
@@ -3162,10 +3634,10 @@ server=function(input, output,session) {
       if(input$user.wq=="None"){
         
         # Get data
-        data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))
+        data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))
         
         # Generate Color Values
-        adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow'))," Precipitation Depth"))
+        adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow'))," Precipitation Depth"))
         
         # Plot Colors by Station
         if(input$plot_color==0){
@@ -3182,7 +3654,7 @@ server=function(input, output,session) {
         
         # Create list of linetypes to format legend
         style=c('solid')
-        for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+        for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
           style=c(style,'3313','solid')
         }
         
@@ -3208,10 +3680,10 @@ server=function(input, output,session) {
           wq[,toString(unlist(plot_key[input$user.wq],use.names=F))]=wq[,toString(unlist(plot_key[input$user.wq],use.names=F))]*(max(plot_table()$Flow_Inst,na.rm=TRUE)/(max(plot_table()[,c(toString(unlist(plot_key[input$user.wq],use.names=F)))],na.rm=TRUE)))
           
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),'Baseflow'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
+          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),'Baseflow'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location),unlist(hydro_legend_key[input$user.wq],use.names=F))),paste("0bserved ",input$user.gauge," Precipitation",sep="")))
           
           # Plot Colors by Station
           if(input$plot_color==0){
@@ -3227,10 +3699,10 @@ server=function(input, output,session) {
           
           # Create list of linetypes to format legend
           # Add linetypes for water quality for station that has no flow data; if statement checks for number of sites that don't have flow data
-          if(length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))!=0){
-            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))))
+          if(length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))!=0){
+            style=rep('1F',each=(length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no)))$Location))-length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))))
             # Add linetypes for baseflow and water quality for station that has flow data
-            for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+            for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
               style=c(style,'3313','solid','1F')
             }
           }
@@ -3241,7 +3713,7 @@ server=function(input, output,session) {
           plot=ggplot(data,aes(x=dateTime))+
             geom_line(aes(y=Flow_Inst,color=paste(Location,"Discharge")),size=1)+
             geom_line(aes(y=baseflow_cfs,color=paste(Location, 'Baseflow')),size=1,linetype="3313")+
-            geom_point(data=subset(wq,site_no %in% input$USGS_Site),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
+            geom_point(data=subset(wq,site_no %in% USGS_Site()),aes_q(x=~dateTime,y=as.name(unlist(plot_key[input$user.wq],use.names=F)),color=~paste(Location,unlist(hydro_legend_key[input$user.wq],use.names=F))),na.rm=TRUE)+
             scale_x_datetime(limits=c(sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"))[1],sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"),decreasing=TRUE)[1]))+
             scale_y_continuous(sec.axis=sec_axis(~.*(max(plot_table()[,c(toString(unlist(plot_key[input$user.wq],use.names=F)))],na.rm=TRUE)/max(plot_table()$Flow_Inst,na.rm=TRUE)),name=toString(wqkey[unlist(plot_key[input$user.wq],use.names=F)])))+
             xlab("Date/Time")+
@@ -3261,10 +3733,10 @@ server=function(input, output,session) {
         # Else if user selects to plot water quality data and water quality data doesn't exist for any site
         else{
           # Get data
-          data=subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
+          data=subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst))&(!is.na(toString(input$user.wq))))
           
           # Generate Color Values
-          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow'))," Precipitation Depth"))
+          adj_names=sort(setdiff(c(paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Discharge'),paste(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location),'Baseflow'))," Precipitation Depth"))
           
           # Plot Colors by Station
           if(input$plot_color==0){
@@ -3280,7 +3752,7 @@ server=function(input, output,session) {
           
           # Create list of linetypes to format legend
           style=c('solid')
-          for(i in 1:length(unique(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
+          for(i in 1:length(unique(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst)))$Location))){
             style=c(style,'3313','solid')
           }
           
@@ -3307,55 +3779,99 @@ server=function(input, output,session) {
   
   output$hydro_interact=renderPlot({hydro_int()})
   
-  output$hydro_click=DT::renderDataTable({
+  
+  ### Tooltip for Interactive Hydrograph
+  output$Hydro_hover=renderUI({
+
+    # Get Data
     if("Flow_Inst"%in%colnames(plot_table())){
-      data=nearPoints(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Flow_Inst))),input$hydro_click,threshold=10,maxpoints=1)
-      data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[input$parameterCd],use.names=F)),allow.absent.cols=TRUE)
+      data=nearPoints(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Flow_Inst))),xvar="dateTime",input$Hydro_hover,threshold=30,maxpoints=1)
+      data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[parameterCd()],use.names=F)),allow.absent.cols=TRUE)
     }
     else{
-      data=nearPoints(plot_table(),input$hydro_click,threshold=10,maxpoints=1)
-      data=nearPoints(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))),input$hydro_click,threshold=10,maxpoints=1)
-      data=SubsetCols(data,c("Char_Date","Location","site_no",unlist(combine_key[input$parameterCd],use.names=F)),allow.absent.cols=TRUE)
+      data=nearPoints(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))),xvar="dateTime",yvar=unlist(plot_key[input$user.wq],use.names=F),input$Hydro_hover,threshold=30,maxpoints=1)
+      data=SubsetCols(data,c("Char_Date","Location","site_no",unlist(combine_key[parameterCd()],use.names=F)),allow.absent.cols=TRUE)
     }
-    names=unlist(combine_key[input$parameterCd],use.names=F) # Get USGS Parameters that aren't Flow_Inst b/c wq_key doesn't include Discharge so you can't plot Discharge on 2nd y-axis
-    data=Setnames(data, c("Char_Date","site_no","baseflow_cfs","Flow_Inst",names[names!="Flow_Inst"]), c("Date","Station","Baseflow (cfs)","Discharge (cfs)",unlist(wq_key[input$parameterCd],use.names=F)),allow.absent.cols=T)
+
+    names=unlist(combine_key[parameterCd()],use.names=F) # Get USGS Parameters that aren't Flow_Inst b/c wq_key doesn't include Discharge so you can't plot Discharge on 2nd y-axis
+    data=Setnames(data, c("Char_Date","site_no","baseflow_cfs","Flow_Inst",names[names!="Flow_Inst"]), c("Date","Station","Baseflow (cfs)","Discharge (cfs)",unlist(wq_key[parameterCd()],use.names=F)),allow.absent.cols=T)
     
-    if("Flow_Inst"%in%colnames(plot_table())){ # Round values if flow is downloaded
-      datatable(data,rownames=F,options=list(scrollX=T))%>%formatRound(c("Baseflow (cfs)","Discharge (cfs)"),2)
+    # Get Point from Hover
+    hover=input$Hydro_hover
+
+    if(nrow(data)==0)return(NULL)
+    
+    # Calculate cursor position INSIDE the plot as percent of total dimensions; from left (horizontal) and from top (vertical)
+    left_pct=(hover$x-hover$domain$left)/(hover$domain$right-hover$domain$left)
+    top_pct=(hover$domain$top-hover$y)/(hover$domain$top-hover$domain$bottom)
+    
+    # Calculate distance from left and bottom side of the plot in pixels
+    left_px=hover$range$left+left_pct*(hover$range$right-hover$range$left)
+    top_px=hover$range$top+top_pct*(hover$range$bottom-hover$range$top)
+    
+    # Format Data for tooltip
+    values=data[1,colnames(data[,!colnames(data)%in%c("Date","Location","Station"),drop=F]),drop=F]
+    values=unlist(values[,colSums(is.na(values))<nrow(values),drop=F]) # Remove NA values
+    output=unlist(unname(lapply(seq(1:length(values)),function(X){paste0("<b>",names(values[X]),": </b>",round(as.numeric(values[X]),2),"<br/>")})))
+    
+    height=75+20*(length(values))
+    width=400
+    
+    # Set offsets of tooltip from cursor depending on quadrant
+    if(left_pct<=0.5){ # Cursor on left half of plot
+      left_offset=2
+    } else{ # Cursor on right half of plot
+      left_offset=(-1*(width+2))
     }
-    else{
-      datatable(data,rownames=F,options=list(scrollX=T))
+    if(top_pct<=0.5){ # Cursor on top half of plot
+      top_offset=(2)
+    } else{ # Cursor on bottom half of plot
+      top_offset=(-1*(height+2))
     }
+    
+    # Create Style Property for tooltip; background color set so tooltip is a bit transparent; z-index set so tooltip will be on top
+    style=paste0("position:absolute;z-index:100;background-color:rgba(245,245,245,0.85);",
+                 "left:",left_px+left_offset,"px;top:",top_px+top_offset,"px;width:",width,"px;height:",height,"px;") # Set Width and Height so tooltip is always the same size
+    
+    # Actual tooltip created as wellPanel
+    wellPanel(
+      style=style,
+      p(HTML(paste0("<b>Location: </b>",data$Location,"<br/>",
+                    paste0("<b> Date/Time: </b>",data$Date,"<br/>"),
+                    gsub(",","",toString(output))
+        )))
+    )
+
   })
   
   # Create Hydro Brush Table
   hydro_brush_table=reactive({
-    data=brushedPoints(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Char_Date))),input$hydro_brush,xvar="dateTime")
+    data=brushedPoints(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Char_Date))),input$hydro_brush,xvar="dateTime")
     
-    data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[input$parameterCd],use.names=F)),allow.absent.cols=TRUE)
+    data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[parameterCd()],use.names=F)),allow.absent.cols=TRUE)
     
     # Get only rows where there is at least one data point
-    data=data[rowSums(is.na(data[c("baseflow_cfs",colnames(data)[which(names(data)%in%unlist(combine_key[input$parameterCd],use.names=F))])]))!=(length(colnames(data)[which(names(data)%in%unlist(combine_key[input$parameterCd],use.names=F))])+1),]
+    data=data[rowSums(is.na(data[c("baseflow_cfs",colnames(data)[which(names(data)%in%unlist(combine_key[parameterCd()],use.names=F))])]))!=(length(colnames(data)[which(names(data)%in%unlist(combine_key[parameterCd()],use.names=F))])+1),]
 
     # Remove baseflow from table if discharge data not downloaded
     if(!"Flow_Inst"%in%colnames(plot_table())){
       data=data[,-match("baseflow_cfs",names(data))]
     }
     
-    names=unlist(combine_key[input$parameterCd],use.names=F) # Get USGS Parameters that aren't Flow_Inst b/c wq_key doesn't include Discharge so you can't plot Discharge on 2nd y-axis
-    data=Setnames(data, c("Char_Date","site_no","baseflow_cfs","Flow_Inst",names[names!="Flow_Inst"]), c("Date","Station","Baseflow (cfs)","Discharge (cfs)",unlist(wq_key[input$parameterCd],use.names=F)),allow.absent.cols=T)
+    names=unlist(combine_key[parameterCd()],use.names=F) # Get USGS Parameters that aren't Flow_Inst b/c wq_key doesn't include Discharge so you can't plot Discharge on 2nd y-axis
+    data=Setnames(data, c("Char_Date","site_no","baseflow_cfs","Flow_Inst",names[names!="Flow_Inst"]), c("Date","Station","Baseflow (cfs)","Discharge (cfs)",unlist(wq_key[parameterCd()],use.names=F)),allow.absent.cols=T)
   
     data
   })
   
   # Calculate Volume of Runoff and Baseflow
   hydro_vols=reactive({
-    data=brushedPoints(subset(plot_table(),(site_no %in% input$USGS_Site)&(!is.na(site_no))&(!is.na(Char_Date))),input$hydro_brush,xvar="dateTime")
+    data=brushedPoints(subset(plot_table(),(site_no %in% USGS_Site())&(!is.na(site_no))&(!is.na(Char_Date))),input$hydro_brush,xvar="dateTime")
     
-    data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[input$parameterCd],use.names=F)),allow.absent.cols=TRUE)
+    data=SubsetCols(data,c("Char_Date","Location","site_no","baseflow_cfs",unlist(combine_key[parameterCd()],use.names=F)),allow.absent.cols=TRUE)
     
     # Get only rows where there is at least one data point
-    data=data[rowSums(is.na(data[c("baseflow_cfs",colnames(data)[which(names(data)%in%unlist(combine_key[input$parameterCd],use.names=F))])]))!=(length(colnames(data)[which(names(data)%in%unlist(combine_key[input$parameterCd],use.names=F))])+1),]
+    data=data[rowSums(is.na(data[c("baseflow_cfs",colnames(data)[which(names(data)%in%unlist(combine_key[parameterCd()],use.names=F))])]))!=(length(colnames(data)[which(names(data)%in%unlist(combine_key[parameterCd()],use.names=F))])+1),]
     
     data$dateTime=as.numeric(as.POSIXct(data$Char_Date, origin = "1970-01-01 00:00.00 UTC"))
     
@@ -3375,15 +3891,15 @@ server=function(input, output,session) {
     }
   })
   
-  output$hydro_brush_vol=DT::renderDataTable({datatable(hydro_vols(),rownames=F,options=list(scrollX=T))%>%formatRound(c("Discharge Volume (cf)","Baseflow Volume (cf)","Runoff Volume (cf)"),0)})
+  output$hydro_brush_vol=DT::renderDataTable({datatable(hydro_vols(),rownames=F,options=list(scrollX=T,language=list(zeroRecords="Brush Interactive Hydrograph To Calculate Volume Summary")))%>%formatRound(c("Discharge Volume (cf)","Baseflow Volume (cf)","Runoff Volume (cf)"),0)})
   
   # Output Hydro Brush Table
   hydro_brush_table_format=reactive({
     if("Flow_Inst"%in%colnames(plot_table())){ # Round values if flow is downloaded
-      datatable(hydro_brush_table(),options=list(scrollX=T))%>%formatRound(c("Baseflow (cfs)","Discharge (cfs)"),2)
+      datatable(hydro_brush_table(),options=list(scrollX=T,language=list(zeroRecords="Brush Interactive Hydrograph To Retrieve Data")))%>%formatRound(c("Baseflow (cfs)","Discharge (cfs)"),2)
     }
     else{
-      datatable(hydro_brush_table(),options=list(scrollX=T))
+      datatable(hydro_brush_table(),options=list(scrollX=T,language=list(zeroRecords="Brush Interactive Hydrograph To Retrieve Data")))
     }
   })
   
@@ -3392,7 +3908,7 @@ server=function(input, output,session) {
   # Download handler for Hydro Brush table
   output$hydro_brush_download <- downloadHandler(
     filename=function(){
-      paste("hydro_brush_",input$PrecipDate[1],"-",input$PrecipDate[2],".csv",sep="")
+      paste("hydro_brush_",date_start(),"-",date_end(),".csv",sep="")
     },
     content = function(fname) {
       write.csv(hydro_brush_table(),fname,row.names=FALSE)
@@ -3401,16 +3917,13 @@ server=function(input, output,session) {
   
   ## Interactive Hyetograph
   USGS_hyet_int=reactive({
-    values=gg_color_hue(1)
-    values[[paste("0bserved ",input$user.gauge," Precipitation",sep="")]]="blue"
-    
     plot=ggplot(subset(plot_table(),(site_no %in% plot_site2())&(!is.na(Char_Date))),aes(x=dateTime,y=Precip_Inst))+
       geom_col(aes(color=paste("0bserved ",input$user.gauge," Precipitation",sep="")), size=1)+
       xlab("Date/Time")+
       ylab("Precipitation Depth (in) \n \n")+
       scale_x_datetime(limits=c(sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"))[1],sort(as.POSIXct(plot_table()$Char_Date, origin = "1970-01-01 00:00.00 UTC"),decreasing=TRUE)[1]))+
       scale_y_reverse()+
-      scale_color_manual(values=values)+
+      scale_color_manual(values="blue")+
       labs(color="")+ # changes legend title
       theme(axis.text=element_text(size=12),
             axis.title=element_text(size=14,face='bold'),
@@ -3434,12 +3947,12 @@ server=function(input, output,session) {
   })
   
   # Output Hyet Brush Table
-  output$hyet_brush=DT::renderDataTable({datatable(hyet_brush_table(),options=list(scrollX=T))%>%formatRound(c("Precip. Depth (in)","Precip. Intensity (in/hr)"),2)})
+  output$hyet_brush=DT::renderDataTable({datatable(hyet_brush_table(),options=list(scrollX=T,language=list(zeroRecords="Brush Interactive Hyetograph To Retrieve Data")))%>%formatRound(c("Precip. Depth (in)","Precip. Intensity (in/hr)"),2)})
   
   # Download handler for Hyet Brush table
   output$hyet_brush_download <- downloadHandler(
     filename=function(){
-      paste("hyet_brush_",input$PrecipDate[1],"-",input$PrecipDate[2],".csv",sep="")
+      paste("hyet_brush_",date_start(),"-",date_end(),".csv",sep="")
     },
     content = function(fname) {
       write.csv(hyet_brush_table(),fname,row.names=FALSE)
@@ -3488,7 +4001,7 @@ server=function(input, output,session) {
   ## Create Plot of HOBO data
   HOBO_graph=reactive({
     # Subset Data
-    data=subset(HOBO_data(),(Sensor %in% input$HOBO_sensor)&(DateTime>=ymd(toString(input$PrecipDate[1]),tz="America/New_York"))&(DateTime<ymd(toString(input$PrecipDate[2]+1),tz="America/New_York")))
+    data=subset(HOBO_data(),(Sensor %in% HOBO_sensor())&(DateTime>=ymd(toString(date_start()),tz="America/New_York"))&(DateTime<ymd(toString(date_end()+1),tz="America/New_York")))
     
     # Generate Color Values
     adj_names=sort(unique(data$Sensor))
@@ -3515,21 +4028,21 @@ server=function(input, output,session) {
     # If there is data then set the x-axis limits this way
     if(nrow(data)!=0){
       # If Start Date = End Date, hyetograph downloads until 24:00 start date, but if Start Date != End Date, hyetograph downloads data until 0:00 End Date; this if statement makes sure hyetograph will download for same date range as hydrograph
-      if(input$PrecipDate[1]==input$PrecipDate[2]){
-        plot=plot+scale_x_datetime(limits=c(ymd(toString(input$PrecipDate[1]),tz="America/New_York"),ymd(toString(input$PrecipDate[2]+1),tz="America/New_York"))) #This aligns correctly if there is data
+      if(date_start()==date_end()){
+        plot=plot+scale_x_datetime(limits=c(ymd(toString(date_start()),tz="America/New_York"),ymd(toString(date_end()+1),tz="America/New_York"))) #This aligns correctly if there is data
       }
       else{
-        plot=plot+scale_x_datetime(limits=c(ymd(toString(input$PrecipDate[1]),tz="America/New_York"),ymd(toString(input$PrecipDate[2]),tz="America/New_York"))) #This aligns correctly if there is data
+        plot=plot+scale_x_datetime(limits=c(ymd(toString(date_start()),tz="America/New_York"),ymd(toString(date_end()),tz="America/New_York"))) #This aligns correctly if there is data
       }
     }
     # If there is no data, the x-axis limits don't align with the ones for the hyetograph, so specify same limits as hyetograph
     else{
       # If Start Date = End Date, hyetograph downloads until 24:00 start date, but if Start Date != End Date, hyetograph downloads data until 0:00 End Date; this if statement makes sure hyetograph will download for same date range as hydrograph
-      if(input$PrecipDate[1]==input$PrecipDate[2]){
-        plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(input$PrecipDate[1]), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(input$PrecipDate[2]+1), origin = "1970-01-01 00:00.00 UTC")))
+      if(date_start()==date_end()){
+        plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(date_start()), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(date_end()+1), origin = "1970-01-01 00:00.00 UTC")))
       }
       else{
-        plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(input$PrecipDate[1]), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(input$PrecipDate[2]), origin = "1970-01-01 00:00.00 UTC")))
+        plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(date_start()), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(date_end()), origin = "1970-01-01 00:00.00 UTC")))
       }
     }
     plot
@@ -3548,11 +4061,11 @@ server=function(input, output,session) {
             # axis.ticks.x=element_blank() # Hide x-axis tick marks
       )
     # If Start Date = End Date, hyetograph downloads until 24:00 start date, but if Start Date != End Date, hyetograph downloads data until 0:00 End Date; this if statement makes sure hyetograph will download for same date range as hydrograph
-    if(input$PrecipDate[1]==input$PrecipDate[2]){
-      plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(input$PrecipDate[1]), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(input$PrecipDate[2]+1), origin = "1970-01-01 00:00.00 UTC")))
+    if(date_start()==date_end()){
+      plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(date_start()), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(date_end()+1), origin = "1970-01-01 00:00.00 UTC")))
     }
     else{
-      plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(input$PrecipDate[1]), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(input$PrecipDate[2]), origin = "1970-01-01 00:00.00 UTC")))
+      plot=plot+scale_x_datetime(limits=c(as.POSIXct(toString(date_start()), origin = "1970-01-01 00:00.00 UTC"),as.POSIXct(toString(date_end()), origin = "1970-01-01 00:00.00 UTC")))
     }
     plot
   })
@@ -3566,7 +4079,7 @@ server=function(input, output,session) {
   
   output$hobo_download=downloadHandler(
     filename=function(){
-      paste("stormsewer_data_",input$PrecipDate[1],"_",input$PrecipDate[2],".csv",sep="")
+      paste("stormsewer_data_",date_start(),"_",date_end(),".csv",sep="")
     },
     content=function(file){
       write.csv(HOBO_data_out(),file,row.names = FALSE)
@@ -3574,7 +4087,7 @@ server=function(input, output,session) {
   )
   
   ## Forecast Table
-  output$forecast=DT::renderDataTable({datatable(forecast(),options=list(scrollX=T))%>%formatRound(c("Precip. Depth (in)"),2)})
+  output$forecast=DT::renderDataTable({datatable(forecast(),rownames=F,options=list(scrollX=T))})
   
   ## Current Weather Conditions Sticker
   output$sticker=renderText(Sticker())
@@ -3583,12 +4096,28 @@ server=function(input, output,session) {
   output$map=renderLeaflet({
     map=leaflet()%>%
       addTiles()%>%
+      # Layers Control
+      addLayersControl(
+        baseGroups=c("Map","Topo","Satellite"),
+        options=layersControlOptions(collapsed=F,autoZIndex=F))%>%
+      addProviderTiles("Esri.WorldTopoMap",group="Topo")%>%
+      addProviderTiles("Esri.WorldImagery",group="Satellite",options=providerTileOptions(maxNativeZoom=18,maxZoom=19))%>%
+      addProviderTiles("CartoDB.PositronOnlyLabels",group="Satellite")%>%
       addAwesomeMarkers(lng=map_data()$Longitude, # Marker Longitude
                         lat=map_data()$Latitude,  # Marker Latitude
                         icon=map_icons(),         # Marker Icons
                         clusterOptions=markerClusterOptions(showCoverageOnHover=F), # Cluster Markers when zooming out
                         popup=map_data()$Label
       )%>%
+      addLabelOnlyMarkers(lng=map_data()$Longitude, # Marker Longitude
+                          lat=map_data()$Latitude,  # Marker Latitude
+                          label=map_data()$Location,
+                          labelOptions=labelOptions(noHide=T,textOnly=T,
+                                                    style=c("color"="black",
+                                                            "font-family"="arial",
+                                                            "font-weight"="bold",
+                                                            "font-size"="14px",
+                                                            "text-shadow"="-1px -1px #FFFFFF, 1px -1px #FFFFFF, -1px 1px #FFFFFF, 1px 1px #FFFFFF")))%>%
       addControl(html=markerLegendHTML(IconSet=legend_icons()),position="bottomright")%>%
       fitBounds(lng1=min(map_data()$Longitude),lng2=max(map_data()$Longitude),lat1=min(map_data()$Latitude),lat2=max(map_data()$Latitude))
     map
@@ -3596,9 +4125,16 @@ server=function(input, output,session) {
   
   ## Create HOBO Map Output
   output$hobo_map=renderLeaflet({
-    if(length(input$HOBO_sensor)==1){ # Only one sensor <- use different view options for just one point vs. multiple points
+    if(length(HOBO_sensor())==1){ # Only one sensor <- use different view options for just one point vs. multiple points
       map=leaflet(options=leafletOptions(minZoom=17,maxZoom = 19))%>%
         addTiles()%>%
+        # Layers Control
+        addLayersControl(
+          baseGroups=c("Map","Topo","Satellite"),
+          options=layersControlOptions(collapsed=F,autoZIndex=F))%>%
+        addProviderTiles("Esri.WorldTopoMap",group="Topo")%>%
+        addProviderTiles("Esri.WorldImagery",group="Satellite",options=providerTileOptions(maxNativeZoom=18,maxZoom=19))%>%
+        addProviderTiles("CartoDB.PositronOnlyLabels",group="Satellite")%>%
         addPolylines(data=sewer())%>% # Add storm sewer shapefile
         addAwesomeMarkers(lng=hobo_map_data()$Longitude, # Marker Longitude
                           lat=hobo_map_data()$Latitude,  # Marker Latitude
@@ -3615,6 +4151,13 @@ server=function(input, output,session) {
     else{ # Multiple Sensors
       map=leaflet(options=leafletOptions(minZoom=17,maxZoom = 19))%>%
         addTiles()%>%
+        # Layers Control
+        addLayersControl(
+          baseGroups=c("Map","Topo","Satellite"),
+          options=layersControlOptions(collapsed=F,autoZIndex=F))%>%
+        addProviderTiles("Esri.WorldTopoMap",group="Topo")%>%
+        addProviderTiles("Esri.WorldImagery",group="Satellite",options=providerTileOptions(maxNativeZoom=18,maxZoom=19))%>%
+        addProviderTiles("CartoDB.PositronOnlyLabels",group="Satellite")%>%
         addPolylines(data=sewer())%>% # Add storm sewer shapefile
         addAwesomeMarkers(lng=hobo_map_data()$Longitude, # Marker Longitude
                           lat=hobo_map_data()$Latitude,  # Marker Latitude
@@ -3638,6 +4181,10 @@ server=function(input, output,session) {
   output$flood_rr1=renderPlot(flood_rr1())
   output$flood_rr2=renderPlot(flood_rr2())
   output$flood_rr3=renderPlot(flood_rr3())
+  output$flood_rr_117=renderPlot(flood_rr_117())
+  output$flood_rr_13=renderPlot(flood_rr_13())
+  output$flood_tinker_columbia=renderPlot(flood_tinker_columbia())
+  output$flood_tinker_glade=renderPlot(flood_tinker_glade())
   
   # Real Time Flood Stage Plots
   output$gh_lick_run=renderPlot(gh_lick_run())
@@ -3645,6 +4192,475 @@ server=function(input, output,session) {
   output$gh_rr1=renderPlot(gh_rr1())
   output$gh_rr2=renderPlot(gh_rr2())
   output$gh_rr3=renderPlot(gh_rr3())
+  output$gh_rr_117=renderPlot(gh_rr_117())
+  output$gh_rr_13=renderPlot(gh_rr_13())
+  output$gh_tinker_columbia=renderPlot(gh_tinker_columbia())
+  output$gh_tinker_glade=renderPlot(gh_tinker_glade())
+  
+
+  ##### Sediment Tab Tools -------------------------------------------------
+  
+  ### Add Turbidity and Flow to downloaded parameters if user clicks on sediment tab
+  observe({
+    if(input$sidebarmenu=="Sediment"){ # Check Page
+      parameters=parameterCd() # Get currently selected parameters
+      if(!"63680"%in%parameters){ # If turbidity isn't in parameters, then download turbidity
+        parameters=c(parameters,"Turbidity (FNU)"="63680")
+        updateSelectizeInput(session,"parameterCd",selected=parameters)
+      }
+      if(!"00060"%in%parameters){ # If flow isn't in parameters, then download flow
+        parameters=c(parameters,"Discharge (cfs)"="00060")
+        updateSelectizeInput(session,"parameterCd",selected=parameters)
+      }
+    }
+  })
+  
+  ### Add Roanoke River at Roanoke Site if Route 117 or 13th Street Stations selected
+  observe({
+    if(input$sidebarmenu=="Sediment"){ # Check Page
+      sites=USGS_Site() # Get currently selected sites
+      if("02054750"%in%sites|"02055080"%in%sites&!"02055000"%in%sites){
+        updateSelectizeInput(session,"USGS_Site",selected=c(sites,"Roanoke River at Roanoke"="02055000"))
+      }
+    }
+  })
+  
+  ### Warning Message that no turbidity data is available for selected sites
+  observe({
+    req(combine_table_out(),"63680"%in%parameterCd())
+    if(input$sidebarmenu=="Sediment"){
+      if(any(grepl("Turbidity_FNU",colnames(combine_table_out())))==F){
+        sendSweetAlert(session,
+                       title="No Available Turbidity Data For Selected Sites",
+                       type="error",
+                       text=paste("Please select a site that with available turbidity data."))
+      }
+    }
+  })
+  
+  ### Hide Discharge/Loads Outputs if no discharge data
+  observe({
+    if(any(grepl("_Flow_cfs",colnames(SS_data()[,colSums(is.na(SS_data()))<nrow(SS_data())])))==T){
+      shinyjs::show(id="loads")
+    } else{
+      shinyjs::hide(id="loads")
+    }
+  })
+  
+  ### Get SSC Turbidity Relationship coefficients from google sheet ID="1bpq1g47vJueD_hlpDDv8gNuUUzcvPzIQ46k7VwO08rs"
+  SSC_coefficients=reactive({
+    data=read_sheet(SSC_sheet)
+    data$Color=gg_color_hue(nrow(data))
+    data
+  })
+  
+  SS_data=reactive({
+    # Make it so it only calculates after data is downloaded and formatted into combine_table_out()
+    req(any(grepl("Turbidity_FNU",colnames(combine_table_out()))))
+    
+    # Get downloaded turbidity and flow data
+    data=combine_table_out()[,c("Date/Time",colnames(combine_table_out())[c(which(grepl("Turbidity_FNU",colnames(combine_table_out()))),which(grepl("Flow_cfs",colnames(combine_table_out()))))])]
+    
+    # Get sites with downloaded turbidity that also have a SSC Turbidity relationship in the google sheet
+    sites=gsub("_Turbidity_FNU","",colnames(data))
+    sites=sites[which(grepl("^[0-9]+$",sites,perl=T))]
+    sites=sites[which(sites%in%SSC_coefficients()$Station)]
+    
+    # Remove rows with all NA turbidity
+    data=data[rowSums(is.na(data[,paste0(sites,"_Turbidity_FNU"),drop=F]))!=length(sites),]
+    
+    # Calculate Flow, SSC, and SS load timeseries for each site
+    for(site in sites){
+      # Flow = Flow Rate from Station Indicated in Google Sheet * Adjustment in Google Sheet
+      flow_station=as.character(SSC_coefficients()[which(SSC_coefficients()$Station==site),"Flow_Station"])
+      flow_correction=as.numeric(SSC_coefficients()[which(SSC_coefficients()$Station==site),"Flow_Correction"])
+      
+      # Make sure that flow data is downloaded before continuing
+      req(paste0(flow_station,"_Flow_cfs")%in%colnames(data))
+      
+      data[,paste0(site,"_Flow_cfs")]=data[,paste0(flow_station,"_Flow_cfs")]*flow_correction
+      
+      # SSC
+      b=as.numeric(SSC_coefficients()[which(SSC_coefficients()$Station==site),"b"])
+      m=as.numeric(SSC_coefficients()[which(SSC_coefficients()$Station==site),"m"])
+      data[,paste0(site,"_SSC_mg/L")]=(exp(b)*((data[,paste0(site,"_Turbidity_FNU")])^m))
+      
+      # SS Load
+      # 28.3168 L/ft^3
+      # 86400 s/d
+      # 9.072x10^8 mg/short ton
+      data[,paste0(site,"_SS_ST/d")]=data[,paste0(site,"_SSC_mg/L")]*28.3168*data[,paste0(site,"_Flow_cfs")]*86400/(9.072*10^8)
+    }
+    
+    # Sort data by site
+    data=data[,c("Date/Time",sort(colnames(data)[which(!colnames(data)=="Date/Time")]))]
+    
+    # Convert Date/Time to POSIXCT
+    data$`Date/Time`=ymd_hms(data$`Date/Time`)
+    
+    data
+  })
+  
+  ### Format SSC Data
+  SSC_data=reactive({
+    # Get SSC data
+    SSC=SS_data()[,c("Date/Time",colnames(SS_data())[which(grepl("_SSC_mg/L",colnames(SS_data())))])]
+    
+    # Convert data to long format
+    SSC=pivot_longer(SSC,cols=colnames(SSC)[which(grepl("_SSC_mg/L",colnames(SSC)))],names_to="Station",values_to="SSC_mg/L",values_drop_na=T)
+    
+    # Format Station Names
+    SSC$Station=gsub("_SSC_mg/L","",SSC$Station)
+    
+    # Add Location
+    SSC$Location=unlist(flow_site_key[SSC$Station],use.names=F)
+    
+    SSC
+  })
+  
+  ### Create Plot of SSC vs. time
+  SSC_plot=reactive({
+    # Get SSC Data
+    SSC=SSC_data()
+
+    # Get colors for graph
+    adj_names=unique(SSC$Location)
+    colors=unlist(lapply(adj_names,function(X){SSC_coefficients()[which(SSC_coefficients()$Location==X),"Color"]}))
+    names(colors)=adj_names
+
+    # Plot SSC Concentration
+    plot=ggplot(SSC,aes(x=`Date/Time`,y=`SSC_mg/L`))+
+      geom_line(aes(color=Location),size=2)+
+      scale_color_manual(name="Location:",values=colors)+
+      xlab("Date/Time")+
+      ylab("Suspended Sediment\nConcentration (mg/L)")+
+      ylim(0,NA)+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12))
+    
+    plot
+  })
+  
+  ### Tooltip for SSC Plot
+  output$SSC_hover=renderUI({
+    # Get Data
+    data=SSC_data()
+
+    # Get Point from Hover
+    hover=input$SSC_hover
+    
+    if(nrow(data)>0){
+
+      # Get all points near cursor
+      point=nearPoints(data,hover,threshold=30,maxpoints=1)
+
+      if(nrow(point)==0)return(NULL)
+      
+      # Calculate cursor position INSIDE the plot as percent of total dimensions; from left (horizontal) and from top (vertical)
+      left_pct=(hover$x-hover$domain$left)/(hover$domain$right-hover$domain$left)
+      top_pct=(hover$domain$top-hover$y)/(hover$domain$top-hover$domain$bottom)
+      
+      # Calculate distance from left and bottom side of the plot in pixels
+      left_px=hover$range$left+left_pct*(hover$range$right-hover$range$left)
+      top_px=hover$range$top+top_pct*(hover$range$bottom-hover$range$top)
+      
+      height=100
+      width=325
+      
+      # Set offsets of tooltip from cursor depending on quadrant
+      if(left_pct<=0.5){ # Cursor on left half of plot
+        left_offset=2
+      } else{ # Cursor on right half of plot
+        left_offset=(-1*(width+2))
+      }
+      if(top_pct<=0.5){ # Cursor on top half of plot
+        top_offset=(2)
+      } else{ # Cursor on bottom half of plot
+        top_offset=(-1*(height+2))
+      }
+      
+      # Create Style Property for tooltip; background color set so tooltip is a bit transparent; z-index set so tooltip will be on top
+      style=paste0("position:absolute;z-index:100;background-color:rgba(245,245,245,0.85);",
+                   "left:",left_px+left_offset,"px;top:",top_px+top_offset,"px;width:",width,"px;height:",height,"px;") # Set Width and Height so tooltip is always the same size
+      
+      # Actual tooltip created as wellPanel
+      wellPanel(
+        style=style,
+        p(HTML(paste0("<b>Location: </b>",point$Location,"<br/>",
+                      paste0("<b> Date/Time: </b>",point$`Date/Time`,"<br/>"),
+                      paste0("<b> SS Concentration: </b>",round(point$`SSC_mg/L`,2)," ","mg/L","<br/>"))))
+      )
+    }
+  })
+
+  ### Format Flow Data
+  SS_Flow_data=reactive({
+    # Get Flow data
+    Flow=SS_data()[,c("Date/Time",colnames(SS_data())[which(grepl("_Flow_cfs",colnames(SS_data())))])]
+    
+    # Convert data to long format
+    Flow=pivot_longer(Flow,cols=colnames(Flow)[which(grepl("_Flow_cfs",colnames(Flow)))],names_to="Station",values_to="Flow_cfs",values_drop_na=T)
+    
+    # Format Station Names
+    Flow$Station=gsub("_Flow_cfs","",Flow$Station)
+    
+    # Subset to only stations with SS data that are in Google sheet
+    Flow=Flow[which(Flow$Station%in%SSC_coefficients()$Station),]
+    
+    # Add Location
+    Flow$Location=unlist(flow_site_key[Flow$Station],use.names=F)
+    
+    Flow
+  })
+  
+  ### Create Plot of Flow vs. time
+  Flow_plot=reactive({
+    
+    # Create plot only if there is flow data
+    req(any(grepl("_Flow_cfs",colnames(SS_data()[,colSums(is.na(SS_data()))<nrow(SS_data())])))==T)
+    
+    # Get Flow Data
+    Flow=SS_Flow_data()
+
+    # Get colors for graph
+    adj_names=unique(Flow$Location)
+    colors=unlist(lapply(adj_names,function(X){SSC_coefficients()[which(SSC_coefficients()$Location==X),"Color"]}))
+    names(colors)=adj_names
+
+    # Plot Flow
+    plot=ggplot(Flow,aes(x=`Date/Time`,y=`Flow_cfs`))+
+      geom_line(aes(color=Location),size=2)+
+      scale_color_manual(name="Location:",values=colors)+
+      xlab("Date/Time")+
+      ylab("Discharge\n(cfs)")+
+      ylim(0,NA)+
+      theme(axis.text=element_text(size=12),
+            axis.title.x=element_blank(),
+            axis.title.y=element_text(size=14,face='bold'),
+            legend.position="none",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12))
+    
+    plot
+  })
+  
+  ### Tooltip for Flow Plot
+  output$Flow_hover=renderUI({
+    # Get Data
+    data=SS_Flow_data()
+    
+    # Get Point from Hover
+    hover=input$Flow_hover
+    
+    if(nrow(data)>0){
+      
+      # Get all points near cursor
+      point=nearPoints(data,hover,threshold=30,maxpoints=1)
+      
+      if(nrow(point)==0)return(NULL)
+      
+      # Calculate cursor position INSIDE the plot as percent of total dimensions; from left (horizontal) and from top (vertical)
+      left_pct=(hover$x-hover$domain$left)/(hover$domain$right-hover$domain$left)
+      top_pct=(hover$domain$top-hover$y)/(hover$domain$top-hover$domain$bottom)
+      
+      # Calculate distance from left and bottom side of the plot in pixels
+      left_px=hover$range$left+left_pct*(hover$range$right-hover$range$left)
+      top_px=hover$range$top+top_pct*(hover$range$bottom-hover$range$top)
+      
+      height=100
+      width=325
+      
+      # Set offsets of tooltip from cursor depending on quadrant
+      if(left_pct<=0.5){ # Cursor on left half of plot
+        left_offset=2
+      } else{ # Cursor on right half of plot
+        left_offset=(-1*(width+2))
+      }
+      if(top_pct<=0.5){ # Cursor on top half of plot
+        top_offset=(2)
+      } else{ # Cursor on bottom half of plot
+        top_offset=(-1*(height+2))
+      }
+      
+      # Create Style Property for tooltip; background color set so tooltip is a bit transparent; z-index set so tooltip will be on top
+      style=paste0("position:absolute;z-index:100;background-color:rgba(245,245,245,0.85);",
+                   "left:",left_px+left_offset,"px;top:",top_px+top_offset,"px;width:",width,"px;height:",height,"px;") # Set Width and Height so tooltip is always the same size
+      
+      # Actual tooltip created as wellPanel
+      wellPanel(
+        style=style,
+        p(HTML(paste0("<b>Location: </b>",point$Location,"<br/>",
+                      paste0("<b> Date/Time: </b>",point$`Date/Time`,"<br/>"),
+                      paste0("<b> Discharge: </b>",round(point$`Flow_cfs`,2)," ","cfs","<br/>"))))
+      )
+    }
+  })
+  
+  ### Format Load Data
+  SS_Load_data=reactive({
+    # Get SS data
+    SS=SS_data()[,c("Date/Time",colnames(SS_data())[which(grepl("_SS_ST/d",colnames(SS_data())))])]
+    
+    # Convert data to long format
+    SS=pivot_longer(SS,cols=colnames(SS)[which(grepl("_SS_ST/d",colnames(SS)))],names_to="Station",values_to="SS_ST/d",values_drop_na=T)
+    
+    # Format Station Names
+    SS$Station=gsub("_SS_ST/d","",SS$Station)
+    
+    # Subset to only stations with SS data that are in Google sheet
+    SS=SS[which(SS$Station%in%SSC_coefficients()$Station),]
+    
+    # Add Location
+    SS$Location=unlist(flow_site_key[SS$Station],use.names=F)
+    
+    SS
+  })
+  
+  ### Create Plot of Load vs. time
+  SS_Load_plot=reactive({
+    
+    # Create plot only if there is load data
+    req(any(grepl("_SS_ST/d",colnames(SS_data()[,colSums(is.na(SS_data()))<nrow(SS_data())])))==T)
+    
+    # Get Load Data
+    SS=SS_Load_data()
+    
+    # Get colors for graph
+    adj_names=unique(SS$Location)
+    colors=unlist(lapply(adj_names,function(X){SSC_coefficients()[which(SSC_coefficients()$Location==X),"Color"]}))
+    names(colors)=adj_names
+    
+    # Plot SS Loads
+    plot=ggplot(SS,aes(x=`Date/Time`,y=`SS_ST/d`))+
+      geom_line(aes(color=Location),size=2)+
+      scale_color_manual(name="Location:",values=colors)+
+      xlab("Date/Time")+
+      ylab("Suspended Sediment\nLoad (Short Tons/d)")+
+      ylim(0,NA)+
+      theme(axis.text=element_text(size=12),
+            axis.title=element_text(size=14,face='bold'),
+            legend.position="bottom",
+            legend.title=element_text(size=14, face='bold'),
+            legend.text=element_text(size=12))
+    
+    plot
+  })
+  
+  ### Tooltip for Load Plot
+  output$Load_hover=renderUI({
+    # Get Data
+    data=SS_Load_data()
+    
+    # Get Point from Hover
+    hover=input$Load_hover
+    
+    if(nrow(data)>0){
+      
+      # Get all points near cursor
+      point=nearPoints(data,hover,threshold=30,maxpoints=1)
+      
+      if(nrow(point)==0)return(NULL)
+      
+      # Calculate cursor position INSIDE the plot as percent of total dimensions; from left (horizontal) and from top (vertical)
+      left_pct=(hover$x-hover$domain$left)/(hover$domain$right-hover$domain$left)
+      top_pct=(hover$domain$top-hover$y)/(hover$domain$top-hover$domain$bottom)
+      
+      # Calculate distance from left and bottom side of the plot in pixels
+      left_px=hover$range$left+left_pct*(hover$range$right-hover$range$left)
+      top_px=hover$range$top+top_pct*(hover$range$bottom-hover$range$top)
+      
+      height=100
+      width=325
+      
+      # Set offsets of tooltip from cursor depending on quadrant
+      if(left_pct<=0.5){ # Cursor on left half of plot
+        left_offset=2
+      } else{ # Cursor on right half of plot
+        left_offset=(-1*(width+2))
+      }
+      if(top_pct<=0.5){ # Cursor on top half of plot
+        top_offset=(2)
+      } else{ # Cursor on bottom half of plot
+        top_offset=(-1*(height+2))
+      }
+      
+      # Create Style Property for tooltip; background color set so tooltip is a bit transparent; z-index set so tooltip will be on top
+      style=paste0("position:absolute;z-index:100;background-color:rgba(245,245,245,0.85);",
+                   "left:",left_px+left_offset,"px;top:",top_px+top_offset,"px;width:",width,"px;height:",height,"px;") # Set Width and Height so tooltip is always the same size
+      
+      # Actual tooltip created as wellPanel
+      wellPanel(
+        style=style,
+        p(HTML(paste0("<b>Location: </b>",point$Location,"<br/>",
+                      paste0("<b> Date/Time: </b>",point$`Date/Time`,"<br/>"),
+                      paste0("<b> SS Load: </b>",round(point$`SS_ST/d`,2)," ","ST/d","<br/>"))))
+      )
+    }
+  })
+  
+  ### Calculate Total Load from brushed SS Load Graph
+  Total_Load=reactive({
+    # Get Data
+    data=brushedPoints(SS_data(),input$load_brush,xvar="Date/Time")
+    
+    # Subset to just Date/Time and Load data
+    data=data[,c("Date/Time",colnames(data)[which(grepl("_SS_ST/d",colnames(data)))])]
+
+    # Convert data to long format
+    data=pivot_longer(data,cols=colnames(data)[which(grepl("_SS_ST/d",colnames(data)))],names_to="Station",values_to="SS_ST/d",values_drop_na=T)
+
+    # Format Station Names
+    data$Station=gsub("_SS_ST/d","",data$Station)
+    
+    # Subset to only stations with SS data that are in Google sheet
+    data=data[which(data$Station%in%SSC_coefficients()$Station),]
+    
+    # Add Location
+    data$Location=unlist(flow_site_key[data$Station],use.names=F)
+
+    # Create Numeric Date (days)
+    data$NumericDate=as.numeric(data$`Date/Time`)/86400
+    
+    if(nrow(data)>=1){
+      # Calculate Total Suspended Sediment Load
+      data=data%>%group_by(Location,Station)%>%
+        summarize(`Start Date/Time`=min(`Date/Time`),
+                  `End Date/Time`=max(`Date/Time`),
+                  `Total Sediment Load (Short Tons)`=trapz(NumericDate,`SS_ST/d`)
+        )
+    } else{
+      # Create Empty Dataframe
+      data=setNames(data.frame(matrix(ncol=5,nrow=0)),c("Location","Station","Start Date/Time","End Date/Time","Total Sediment Load (Short Tons)")) # Create Empty Dataframe
+    }
+
+    # Display Dates as Character
+    data$`Start Date/Time`=as.character(data$`Start Date/Time`)
+    data$`End Date/Time`=as.character(data$`End Date/Time`)
+    
+    data
+  })
+  
+  # Download Handler for Loads Table
+  output$loads_download=downloadHandler(
+    filename=function(){
+      paste("Total_Sediment_Loads_",date_start(),"_",date_end(),".csv",sep="")
+    },
+    content=function(file){
+      write.csv(Total_Load(),file,row.names = FALSE)
+    }
+  )
+
+  ### Outputs
+  output$SSC_plot=renderPlot(SSC_plot())
+  output$Flow_plot=renderPlot(Flow_plot())
+  output$SS_Load_plot=renderPlot(SS_Load_plot())
+  output$SS_table=DT::renderDataTable(datatable(Total_Load(),rownames=F,
+                                                options=list(dom="t",columnDefs=list(list(className="dt-center",targets="_all")),language=list(zeroRecords="Brush Suspended Sediment Load Graph To Calculate Total Loads")))%>%
+                                                formatRound(5,2))
+
 
 }
 

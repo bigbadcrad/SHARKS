@@ -1,5 +1,5 @@
 # SHARKS
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.1977491.svg)](https://doi.org/10.5281/zenodo.1977491)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3843312.svg)](https://doi.org/10.5281/zenodo.3843312)
 
 This repository holds files necessary to run the Stream Hydrology And Rainfall Knowledge System (SHARKS) web app. The SHARKS platform was developed to retrieve and visualize hydrologic and meteorologic data from various sources while addressing syntactic and semantic differences in data formats. SHARKS also provides a suite of exploratory data analysis features including the ability to calculate the total precipitation depth recorded for any period, interpolate the annual recurrence interval for precipitation events, perform hydrograph separations, and calculate the volume of runoff for any period.
 
